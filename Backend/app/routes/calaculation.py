@@ -1,24 +1,22 @@
-from fastapi import FastAPI, HTTPException, APIRouter
-from models.calculation import (
+from fastapi import FastAPI, HTTPException, APIRouter, Form
+from app.models.calculation import (
     FutureValue,
     BlendedReturn,
     RequiredAnnualSavings,
     SuggestedAllocation,
     CheckFeasibility,
     CheckRebalancing,
-    CorpusRequest,
     SIPRequest,
     GlidePathRequest,
     RebalanceRequest
 )
-from services.math.calculatioon import (
+from app.services.math.calculation import (
     future_value_goal,
     blended_return,
     required_annual_saving, 
     suggest_allocation,
     check_feasibility,
     check_rebalancing,
-    calculate_corpus,
     calculate_sip,
     calculate_glide_path,
     check_portfolio_rebalance
@@ -41,7 +39,18 @@ def calaculate_blended_return(data: BlendedReturn):
     return blended_return(data)
 
 @router.post("/required_annual_saving")
-def calculate_required_annual_savig(data: RequiredAnnualSavings):
+def calculate_required_annual_savig(
+    future_value: float = Form(),
+    return_rate: float = Form(),
+    years: float = Form(),
+    current_savings: float = Form(0)
+):
+    data = RequiredAnnualSavings(
+        future_value=future_value,
+        return_rate=return_rate,
+        years=years,
+        current_savings=current_savings
+    )
     return required_annual_saving(data)
 
 @router.post("/suggest_allocation")
@@ -58,10 +67,6 @@ def calculate_rebalancing(data: CheckRebalancing):
 
 
 # --- Phase 1 New Endpoints ---
-
-@router.post("/corpus")
-def endpoint_calculate_corpus(data: CorpusRequest):
-    return calculate_corpus(data)
 
 @router.post("/starting-sip")
 def endpoint_calculate_sip(data: SIPRequest):

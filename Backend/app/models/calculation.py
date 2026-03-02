@@ -29,14 +29,7 @@ class CheckFeasibility(BaseModel):
 class CheckRebalancing(BaseModel):
     planned_alloc: dict
     current_alloc: dict
-    threshold: float = 0.1
-
-class CorpusRequest(BaseModel):
-    monthly_exp: float
-    inflation: float
-    years_to_goal: int
-    years_in_withdrawal: int
-    post_ret_return: float
+    threshold: float = 0.5
 
 class SIPRequest(BaseModel):
     target_corpus: float

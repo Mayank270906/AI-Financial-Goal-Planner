@@ -6,12 +6,12 @@ from app.models.calculation import (
     SuggestedAllocation,
     CheckFeasibility,
     CheckRebalancing,
-    CorpusRequest,
     SIPRequest,
     GlidePathRequest,
     RebalanceRequest
 )
-import math
+
+
 
 def future_value_goal(data: FutureValue):
     P = data.principal
@@ -95,39 +95,6 @@ def check_rebalancing(data: CheckRebalancing):
     return {"needs_rebalancing": needs_rebalancing, "deviations": deviations}
 
 # Phase 1 Implementation
-
-def calculate_corpus(data: CorpusRequest):
-    """
-    Calculates the total inflation-adjusted corpus required at the start of the goal.
-    Formulae:
-    1. FV_expense = monthly_exp * (1 + inflation)^years_to_goal
-    2. Real Rate (R) = ((1 + post_ret_return) / (1 + inflation)) - 1
-    3. Corpus = (FV_expense * 12) * ((1 - (1 + R)^(-years_in_withdrawal)) / R) * (1 + R)
-    """
-    monthly_exp = data.monthly_exp
-    inflation = data.inflation / 100
-    years_to_goal = data.years_to_goal
-    years_in_withdrawal = data.years_in_withdrawal
-    post_ret_return = data.post_ret_return / 100
-
-    # 1. Inflate Current Expenses
-    fv_expense_monthly = monthly_exp * ((1 + inflation) ** years_to_goal)
-    fv_expense_annual = fv_expense_monthly * 12
-
-    # 2. Calculate Real Rate of Return
-    # Avoid division by zero if inflation matches return exactly (edge case)
-    if (1 + inflation) == 0:
-        real_rate = 0 # Should not happen in economic context
-    else:
-        real_rate = ((1 + post_ret_return) / (1 + inflation)) - 1
-
-    # 3. Total Corpus (PV of Annuity Due)
-    if real_rate == 0:
-        target_corpus = fv_expense_annual * years_in_withdrawal
-    else:
-        target_corpus = fv_expense_annual * ((1 - (1 + real_rate) ** (-years_in_withdrawal)) / real_rate) * (1 + real_rate)
-
-    return {"target_corpus": round(target_corpus, 2)}
 
 def calculate_sip(data: SIPRequest):
     """
