@@ -107,3 +107,7 @@ class BucketAllocation(BaseModel):
     purpose: str
     equity_amount: float
     debt_amount: float
+    
+class ExplainRetirementRequest(BaseModel):
+    retirement_plan: dict
+    user_question: Optional[str] = None

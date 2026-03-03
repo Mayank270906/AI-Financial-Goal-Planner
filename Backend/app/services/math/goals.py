@@ -11,13 +11,6 @@ load_dotenv()
 
 
 def check_feasibility_retirement(r: Retirement, additional_monthly_sip: float) -> dict:
-    """
-    Year-by-year affordability check across the entire accumulation phase.
-
-    Income grows at income_raise_pct each year (and spouse income if married).
-    Total SIP (existing + additional) steps up at real income growth rate (inflation-adjusted).
-    Flags any year where total SIP exceeds 50% of household monthly income.
-    """
     g = r.income_raise_pct / 100
     gs = (r.spouse_income_raise_pct or 0) / 100
     i = r.inflation_rate / 100
@@ -163,11 +156,6 @@ def compute_bucket_strategy(
     life_expectancy: int,
     current_age_at_review: Optional[int] = None  # for glide path if reviewing mid-retirement
 ) -> dict:
-    """
-    Splits the retirement corpus into three buckets.
-    Applies age-aware glide path to equity allocation within each bucket.
-    """
-
     i = inflation_rate / 100
     W = net_annual_withdrawal
     review_age = current_age_at_review or retirement_age  # at retirement if first plan
@@ -277,14 +265,6 @@ def compute_bucket_strategy(
     }
 # ── Function 4: Pre-retirement glide path ─────────────────────────
 def compute_pre_retirement_glide_path(r: Retirement, monthly_sip: float) -> dict:
-    """
-    Produces a year-by-year investment roadmap for the accumulation phase.
-    Equity allocation reduces as the user approaches retirement — 
-    purely a function of years remaining to retirement.
-
-    monthly_sip here is total SIP = existing + additional_sip_required.
-    It steps up each year at the derived real income growth rate.
-    """
     i = r.inflation_rate / 100
     g = r.income_raise_pct / 100
     s = ((1 + g) / (1 + i)) - 1          # derived step-up rate
@@ -354,15 +334,6 @@ def compute_pre_retirement_glide_path(r: Retirement, monthly_sip: float) -> dict
 
 # ── Orchestrator: updated to include glide path ───────────────────
 def get_retirement_plan(r: Retirement) -> dict:
-    """
-    Flow:
-        compute_retirement_corpus()
-            → check_feasibility_retirement()
-                → if infeasible : return corpus + feasibility only
-                → if feasible   : compute_pre_retirement_glide_path()
-                                  compute_bucket_strategy()
-    """
-
     # Step 1: Corpus and SIP
     corpus_result = compute_retirement_corpus(r)
 
@@ -410,10 +381,6 @@ def get_retirement_plan(r: Retirement) -> dict:
 
 
 def format_inr(value: float) -> str:
-    """
-    Formats a float into Indian number system string.
-    e.g. 120588890.81 → '₹12,05,88,890.81' (12 crore, 5 lakh, 88 thousand, 890.81)
-    """
     is_negative = value < 0
     value = abs(value)
     
@@ -445,10 +412,6 @@ def format_inr(value: float) -> str:
 
 
 def build_ai_payload(plan: dict) -> dict:
-    """
-    Builds a pre-formatted payload for the AI model with properly formatted INR values.
-    The AI will copy these formatted strings directly without reformatting.
-    """
     corpus = plan["corpus"]
     buckets = plan["buckets"]["buckets"]
     glide_path = plan["glide_path"]
