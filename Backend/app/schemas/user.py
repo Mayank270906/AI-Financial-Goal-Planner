@@ -100,7 +100,6 @@ class Retirement(CreateUser):
 
 
 class RetirementRequest(BaseModel):
-    """Retirement endpoint request — only retirement-specific fields. User data fetched from DB."""
     retirement_age: int = Field(..., ge=35, le=80, description="Target Retirement Age")
     post_retirement_expense_pct: float = Field(..., gt=0, le=100, description="Post-retirement expenses as % of pre-retirement expenses")
     post_retirement_return: float = Field(7.0, gt=0, le=20, description="Expected annual return on retirement corpus post-retirement (%)")
@@ -131,3 +130,8 @@ class BucketAllocation(BaseModel):
 class ExplainRetirementRequest(BaseModel):
     retirement_plan: dict
     user_question: Optional[str] = None
+    
+class ExplainOneTimeGoalRequest(BaseModel):
+    goal_plan: dict
+    user_question: Optional[str] = None
+

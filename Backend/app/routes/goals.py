@@ -1,12 +1,15 @@
 from fastapi import APIRouter, Form, Depends, HTTPException
-from app.schemas.user import Retirement, ExplainRetirementRequest, RetirementRequest
-from app.services.math.goals import get_retirement_plan, explain_retirement_plan_with_ai, save_retirement_plan
+from app.schemas.user import Retirement, ExplainRetirementRequest, ExplainOneTimeGoalRequest
+from app.schemas.goals import OneTimeGoalRequest
+from app.services.math.goals import get_retirement_plan, explain_retirement_plan_with_ai, save_retirement_plan, one_time_goal, explain_one_time_goal_with_ai, save_one_time_goal_plan
 from app.databse import get_db
-from app.models.db import User
+from app.models.db import User, GoalPlan
 from typing import Optional
 from app.routes.auth import get_current_user
 from sqlalchemy.orm import Session
 import json
+
+
 
 
 
@@ -89,6 +92,65 @@ def endpoint_explain_retirement_plan(request: ExplainRetirementRequest):
     return {
         "explanation": explain_retirement_plan_with_ai(
             request.retirement_plan,
+            request.user_question
+        )
+    }
+
+@router.post("/one_time_goal")
+def endpoint_one_time_goal(
+    goal_name: str = Form(..., description="Name of the goal (e.g., 'Buy a Car', 'House Down Payment')"),
+    goal_amount: float = Form(..., gt=0, description="Goal amount in today's value"),
+    years_to_goal: float = Form(..., gt=0, le=50, description="Years until goal is needed"),
+    pre_ret_return: float = Form(10.0, gt=0, le=20, description="Expected annual return on investments (%)"),
+    existing_corpus: float = Form(0.0, ge=0, description="Existing savings toward this goal"),
+    existing_monthly_sip: float = Form(0.0, ge=0, description="Existing monthly SIP for this goal"),
+    risk_tolerance: str = Form("moderate", description="Risk tolerance: low, moderate, high"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+
+    # User already fetched from DB by get_current_user dependency
+    if not current_user:
+        raise HTTPException(status_code=404, detail="User not found. Please complete the onboarding first.")
+    
+    # Validate that user has completed financial profile
+    if not current_user.current_income or not current_user.current_monthly_expenses:
+        raise HTTPException(
+            status_code=400, 
+            detail="Financial profile incomplete. Please complete your income and expense details first."
+        )
+    
+    # Build OneTimeGoalRequest with form data
+    goal_request = OneTimeGoalRequest(
+        goal_name=goal_name,
+        goal_amount=goal_amount,
+        years_to_goal=years_to_goal,
+        pre_ret_return=pre_ret_return,
+        existing_corpus=existing_corpus,
+        existing_monthly_sip=existing_monthly_sip,
+        risk_tolerance=risk_tolerance
+    )
+    
+    # Calculate goal plan using user's financial profile
+    plan = one_time_goal(goal_request, current_user)
+    
+    # Save plan to database
+    try:
+        save_one_time_goal_plan(db, current_user.id, plan)
+        print(f"✓ One-time goal plan '{goal_name}' saved for user {current_user.id}")
+    except Exception as e:
+        # Log error but don't fail the response - plan calculation is more important
+        print(f"Warning: Failed to save goal plan to database: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+    
+    return plan
+
+@router.post("/explain_one_time_goal")
+def endpoint_explain_one_time_goal(request: ExplainOneTimeGoalRequest):
+    return {
+        "explanation": explain_one_time_goal_with_ai(
+            request.goal_plan,
             request.user_question
         )
     }

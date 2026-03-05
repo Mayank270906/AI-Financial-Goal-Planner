@@ -5,7 +5,7 @@ Test suite for calculation.py functions: future_value, feasibility, allocation, 
 import pytest
 from app.schemas.calculation import (
     FutureValue,
-    CheckFeasibility,
+    CheckFeasibilityRequest,
     SuggestedAllocation,
     SIPRequest,
     GlidePathRequest,
@@ -97,75 +97,92 @@ class TestFutureValue:
 # ─────────────────────────────────────────────────────────────────────
 
 class TestCheckFeasibility:
-    """Test check_feasibility function."""
+    """Test check_feasibility function with new schema."""
 
-    def test_feasible_when_saving_below_max(self):
-        """Feasible when required saving <= max possible saving."""
-        data = CheckFeasibility(
-            annual_saving_required=500_000,
-            max_possible_saving=1_000_000
+    def test_feasible_within_savings_cap(self):
+        """Feasible when total SIP is within savings cap."""
+        data = CheckFeasibilityRequest(
+            starting_monthly_sip=30_000,
+            annual_step_up_pct=0.94,
+            monthly_income=200_000,
+            income_raise_pct=7.0,
+            monthly_expenses=50_000,
+            years_to_goal=5,
+            existing_monthly_sip=0.0,
+            savings_cap_pct=50.0
         )
         result = check_feasibility(data)
         assert result["feasible"] is True
-        assert result["shortfall"] == 0
+        assert result["breach_count"] == 0
 
-    def test_infeasible_when_saving_exceeds_max(self):
-        """Infeasible when required saving > max possible saving."""
-        data = CheckFeasibility(
-            annual_saving_required=1_500_000,
-            max_possible_saving=1_000_000
+    def test_infeasible_exceeds_savings_cap(self):
+        """Infeasible when total SIP exceeds savings cap."""
+        data = CheckFeasibilityRequest(
+            starting_monthly_sip=150_000,  # Far too high
+            annual_step_up_pct=0.94,
+            monthly_income=200_000,
+            income_raise_pct=7.0,
+            monthly_expenses=50_000,
+            years_to_goal=5,
+            existing_monthly_sip=0.0,
+            savings_cap_pct=50.0
         )
         result = check_feasibility(data)
         assert result["feasible"] is False
-        assert result["shortfall"] == 500_000
+        assert result["breach_count"] > 0
 
     def test_feasible_at_boundary(self):
-        """Feasible when required = max possible."""
-        data = CheckFeasibility(
-            annual_saving_required=1_000_000,
-            max_possible_saving=1_000_000
+        """Feasible when at exact savings cap."""
+        # Disposable income = 150k (200k - 50k)
+        # 50% cap = 75k
+        data = CheckFeasibilityRequest(
+            starting_monthly_sip=75_000,
+            annual_step_up_pct=0.0,  # No step-up for simplicity
+            monthly_income=200_000,
+            income_raise_pct=7.0,
+            monthly_expenses=50_000,
+            years_to_goal=3,
+            existing_monthly_sip=0.0,
+            savings_cap_pct=50.0
         )
         result = check_feasibility(data)
-        assert result["feasible"] is True
-        assert result["shortfall"] == 0
-
-    def test_infeasible_just_over_max(self):
-        """Infeasible when required slightly exceeds max."""
-        data = CheckFeasibility(
-            annual_saving_required=1_000_001,
-            max_possible_saving=1_000_000
-        )
-        result = check_feasibility(data)
-        assert result["feasible"] is False
-        assert result["shortfall"] == 1
-
-    def test_shortfall_zero_when_feasible(self):
-        """Shortfall is zero for any feasible scenario."""
-        data = CheckFeasibility(
-            annual_saving_required=100_000,
-            max_possible_saving=500_000
-        )
-        result = check_feasibility(data)
-        assert result["shortfall"] == 0
-
-    def test_zero_required_saving(self):
-        """Zero required saving is always feasible."""
-        data = CheckFeasibility(
-            annual_saving_required=0,
-            max_possible_saving=1_000_000
-        )
-        result = check_feasibility(data)
+        # Should be feasible at exact boundary
         assert result["feasible"] is True
 
-    def test_zero_max_saving_with_requirement(self):
-        """Zero max saving with requirement is infeasible."""
-        data = CheckFeasibility(
-            annual_saving_required=100_000,
-            max_possible_saving=0
+    def test_existing_sip_considered(self):
+        """Test existing SIP commitments are considered."""
+        data = CheckFeasibilityRequest(
+            starting_monthly_sip=40_000,
+            annual_step_up_pct=0.94,
+            monthly_income=200_000,
+            income_raise_pct=7.0,
+            monthly_expenses=50_000,
+            years_to_goal=5,
+            existing_monthly_sip=30_000,  # Already committed 30k
+            savings_cap_pct=50.0
         )
         result = check_feasibility(data)
-        assert result["feasible"] is False
-        assert result["shortfall"] == 100_000
+        # Total would be 70k which is within 75k cap
+        assert "yearly_summary" in result
+        assert all(item["existing_sip"] == 30_000 for item in result["yearly_summary"][:1])
+
+    def test_yearly_summary_present(self):
+        """Test yearly summary is included in result."""
+        data = CheckFeasibilityRequest(
+            starting_monthly_sip=30_000,
+            annual_step_up_pct=0.94,
+            monthly_income=200_000,
+            income_raise_pct=7.0,
+            monthly_expenses=50_000,
+            years_to_goal=5,
+            existing_monthly_sip=0.0,
+            savings_cap_pct=50.0
+        )
+        result = check_feasibility(data)
+        assert "yearly_summary" in result
+        assert len(result["yearly_summary"]) == 5
+        assert all("year" in item for item in result["yearly_summary"])
+        assert all("savings_ratio_pct" in item for item in result["yearly_summary"])
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -412,27 +429,24 @@ class TestGlidePath:
             assert entry["equity_percent"] + entry["debt_percent"] == 100.0
 
     def test_glide_path_zero_years_to_goal(self):
-        """Zero years to goal: current_age = goal_age returns empty schedule."""
-        data = GlidePathRequest(
-            current_age=50,
-            goal_age=50,
-            start_equity_percent=75.0,
-            end_equity_percent=25.0
-        )
-        result = calculate_glide_path(data)
-        # Zero years returns empty schedule
-        assert len(result["yearly_allocation_table"]) == 0
+        """Zero years to goal: current_age = goal_age raises ValidationError."""
+        with pytest.raises(Exception):  # Pydantic ValidationError
+            data = GlidePathRequest(
+                current_age=50,
+                goal_age=50,
+                start_equity_percent=75.0,
+                end_equity_percent=25.0
+            )
 
     def test_glide_path_negative_years_returns_empty(self):
-        """Negative years (goal_age < current_age) returns empty."""
-        data = GlidePathRequest(
-            current_age=60,
-            goal_age=50,
-            start_equity_percent=75.0,
-            end_equity_percent=25.0
-        )
-        result = calculate_glide_path(data)
-        assert result["yearly_allocation_table"] == []
+        """Negative years (goal_age < current_age) raises ValidationError."""
+        with pytest.raises(Exception):  # Pydantic ValidationError
+            data = GlidePathRequest(
+                current_age=60,
+                goal_age=50,
+                start_equity_percent=75.0,
+                end_equity_percent=25.0
+            )
 
     def test_glide_path_short_window(self):
         """Short 3-year window should still show linear decrease."""
@@ -492,75 +506,75 @@ class TestCalculateSIP:
     def test_sip_basic_calculation(self):
         """Basic SIP calculation with inflation and salary hike."""
         data = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=10.0,
             inflation_rate=6.0,
             income_raise_pct=8.0,
             years_to_goal=20
         )
         result = calculate_sip(data)
-        assert result["starting_monthly_investment"] > 0
-        assert isinstance(result["starting_monthly_investment"], float)
+        assert result["starting_monthly_sip"] > 0
+        assert isinstance(result["starting_monthly_sip"], float)
 
     def test_sip_zero_inflation(self):
         """SIP with zero inflation should work."""
         data = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=10.0,
             inflation_rate=0.0,
             income_raise_pct=5.0,
             years_to_goal=20
         )
         result = calculate_sip(data)
-        assert result["starting_monthly_investment"] > 0
+        assert result["starting_monthly_sip"] > 0
 
     def test_sip_zero_income_raise(self):
         """SIP with zero income raise (flat salary)."""
         data = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=10.0,
             inflation_rate=6.0,
             income_raise_pct=0.0,
             years_to_goal=20
         )
         result = calculate_sip(data)
-        assert result["starting_monthly_investment"] > 0
+        assert result["starting_monthly_sip"] > 0
 
     def test_sip_income_raise_equals_inflation(self):
         """SIP when income raise = inflation (no real growth)."""
         data = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=10.0,
             inflation_rate=6.0,
             income_raise_pct=6.0,  # Same as inflation
             years_to_goal=20
         )
         result = calculate_sip(data)
-        assert result["starting_monthly_investment"] > 0
+        assert result["starting_monthly_sip"] > 0
 
     def test_sip_income_raise_exceeds_inflation(self):
         """SIP when income raise > inflation (real income growth)."""
         data = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=10.0,
             inflation_rate=5.0,
             income_raise_pct=10.0,  # Greater than inflation
             years_to_goal=20
         )
         result = calculate_sip(data)
-        assert result["starting_monthly_investment"] > 0
+        assert result["starting_monthly_sip"] > 0
 
     def test_sip_lower_return_requires_higher_sip(self):
         """Lower return rate requires higher SIP."""
         data_low_return = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=7.0,  # Lower return
             inflation_rate=6.0,
             income_raise_pct=8.0,
             years_to_goal=20
         )
         data_high_return = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=12.0,  # Higher return
             inflation_rate=6.0,
             income_raise_pct=8.0,
@@ -568,19 +582,19 @@ class TestCalculateSIP:
         )
         result_low = calculate_sip(data_low_return)
         result_high = calculate_sip(data_high_return)
-        assert result_low["starting_monthly_investment"] > result_high["starting_monthly_investment"]
+        assert result_low["starting_monthly_sip"] > result_high["starting_monthly_sip"]
 
     def test_sip_shorter_window_requires_higher_sip(self):
         """Shorter accumulation window requires higher SIP."""
         data_short = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=10.0,
             inflation_rate=6.0,
             income_raise_pct=8.0,
             years_to_goal=10  # Shorter
         )
         data_long = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=10.0,
             inflation_rate=6.0,
             income_raise_pct=8.0,
@@ -588,19 +602,19 @@ class TestCalculateSIP:
         )
         result_short = calculate_sip(data_short)
         result_long = calculate_sip(data_long)
-        assert result_short["starting_monthly_investment"] > result_long["starting_monthly_investment"]
+        assert result_short["starting_monthly_sip"] > result_long["starting_monthly_sip"]
 
     def test_sip_higher_corpus_requires_higher_sip(self):
         """Higher target corpus requires higher SIP."""
         data_low_corpus = SIPRequest(
-            target_corpus=5_000_000,
+            goal_amount=5_000_000,
             pre_ret_return=10.0,
             inflation_rate=6.0,
             income_raise_pct=8.0,
             years_to_goal=20
         )
         data_high_corpus = SIPRequest(
-            target_corpus=20_000_000,
+            goal_amount=20_000_000,
             pre_ret_return=10.0,
             inflation_rate=6.0,
             income_raise_pct=8.0,
@@ -608,7 +622,7 @@ class TestCalculateSIP:
         )
         result_low = calculate_sip(data_low_corpus)
         result_high = calculate_sip(data_high_corpus)
-        assert result_low["starting_monthly_investment"] < result_high["starting_monthly_investment"]
+        assert result_low["starting_monthly_sip"] < result_high["starting_monthly_sip"]
 
     def test_sip_result_is_positive(self):
         """SIP result should always be positive."""
@@ -619,20 +633,20 @@ class TestCalculateSIP:
         ]
         for corpus, ret, inf, inc, years in test_cases:
             data = SIPRequest(
-                target_corpus=corpus,
+                goal_amount=corpus,
                 pre_ret_return=ret,
                 inflation_rate=inf,
                 income_raise_pct=inc,
                 years_to_goal=years
             )
             result = calculate_sip(data)
-            assert result["starting_monthly_investment"] > 0
+            assert result["starting_monthly_sip"] > 0
 
     def test_sip_step_up_derived_from_inflation_and_income(self):
         """SIP step-up should be derived from income raise and inflation."""
         # When income_raise > inflation, step-up should be positive
         data = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=10.0,
             inflation_rate=5.0,
             income_raise_pct=10.0,  # > inflation
@@ -640,8 +654,8 @@ class TestCalculateSIP:
         )
         result = calculate_sip(data)
         # g = ((1 + 0.10) / (1 + 0.05)) - 1 = 1.1 / 1.05 - 1 ≈ 0.0476 (4.76% real growth)
-        assert result["starting_monthly_investment"] > 0
-        assert isinstance(result["starting_monthly_investment"], float)
+        assert result["starting_monthly_sip"] > 0
+        assert isinstance(result["starting_monthly_sip"], float)
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -658,14 +672,22 @@ class TestCalculationFlow:
         fv_result = future_value_goal(fv_data)
         goal_fv = fv_result["future_value"]
 
-        # Step 2: Check if 500k annual saving is feasible for this goal
-        feas_data = CheckFeasibility(
-            annual_saving_required=goal_fv / 10,  # Spread over 10 years
-            max_possible_saving=500_000
+        # Step 2: Check if one-time goal requiring SIP is feasible
+        # Assume need 30k monthly SIP with step-up for this goal
+        feas_data = CheckFeasibilityRequest(
+            starting_monthly_sip=30_000,
+            annual_step_up_pct=0.94,
+            monthly_income=200_000,
+            income_raise_pct=7.0,
+            monthly_expenses=50_000,
+            years_to_goal=10,
+            existing_monthly_sip=0.0,
+            savings_cap_pct=50.0
         )
         feas_result = check_feasibility(feas_data)
         
         assert feas_result["feasible"] is True or feas_result["feasible"] is False
+        assert "yearly_summary" in feas_result
 
     def test_allocation_then_sip_calculation(self):
         """Determine allocation, then calculate SIP for risk profile."""
@@ -675,7 +697,7 @@ class TestCalculationFlow:
         
         # Step 2: Calculate SIP for corpus with derived step-up
         sip_data = SIPRequest(
-            target_corpus=10_000_000,
+            goal_amount=10_000_000,
             pre_ret_return=10.0,
             inflation_rate=6.0,
             income_raise_pct=8.0,
@@ -683,7 +705,7 @@ class TestCalculationFlow:
         )
         sip_result = calculate_sip(sip_data)
         
-        assert sip_result["starting_monthly_investment"] > 0
+        assert sip_result["starting_monthly_sip"] > 0
 
     def test_glide_path_then_allocation(self):
         """Generate glide path, then verify allocation consistency."""
@@ -703,3 +725,5 @@ class TestCalculationFlow:
         assert first_equity == 75.0
         assert last_equity == 25.0
         assert first_equity > last_equity
+
+

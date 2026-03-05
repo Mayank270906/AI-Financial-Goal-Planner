@@ -69,8 +69,19 @@ class GoalPlan(Base):
     id          = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id     = Column(String(36), nullable=False, index=True)
     created_at  = Column(DateTime, default=datetime.utcnow)
+    
     goal_type   = Column(String(50), nullable=False)   # one_time / recurring
     goal_name   = Column(String(255), nullable=False)
-    goal_data   = Column(Text, nullable=False)      # full goal plan JSON
+    
+    # Financial summary fields (quick access for dashboard)
+    target_amount        = Column(Float, nullable=True) # How much is needed in today's terms
+    future_value         = Column(Float, nullable=True) # How much will be needed after inflation
+    monthly_sip_required = Column(Float, nullable=True) # Required monthly investment
+    time_horizon_years   = Column(Integer, nullable=True) # Years from now until goal
+    status               = Column(String(20), nullable=True)  # feasible / infeasible
+    
+    # Detailed JSON output (year-by-year etc)
+    goal_data   = Column(Text, nullable=False)      
+    
     priority    = Column(Integer, nullable=True)
     is_active   = Column(Boolean, default=True)

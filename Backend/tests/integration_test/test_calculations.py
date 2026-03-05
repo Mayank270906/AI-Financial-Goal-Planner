@@ -162,23 +162,55 @@ class TestSuggestAllocationIntegration:
 
 class TestCheckFeasibilityIntegration:
 	def test_check_feasibility_feasible(self):
-		payload = {"annual_saving_required": 400_000, "max_possible_saving": 500_000}
+		payload = {
+			"starting_monthly_sip": 30_000,
+			"annual_step_up_pct": 0.94,
+			"monthly_income": 200_000,
+			"income_raise_pct": 7.0,
+			"monthly_expenses": 50_000,
+			"years_to_goal": 5,
+			"existing_monthly_sip": 0.0,
+			"savings_cap_pct": 50.0
+		}
 		response = client.post("/calculation/check_feasibility", json=payload)
 		assert response.status_code == 200
-		assert response.json() == {"feasible": True, "shortfall": 0}
+		result = response.json()
+		assert result["feasible"] is True
+		assert result["breach_count"] == 0
 
 	def test_check_feasibility_infeasible(self):
-		payload = {"annual_saving_required": 700_000, "max_possible_saving": 500_000}
+		payload = {
+			"starting_monthly_sip": 150_000,  # Far too high
+			"annual_step_up_pct": 0.94,
+			"monthly_income": 200_000,
+			"income_raise_pct": 7.0,
+			"monthly_expenses": 50_000,
+			"years_to_goal": 5,
+			"existing_monthly_sip": 0.0,
+			"savings_cap_pct": 50.0
+		}
 		response = client.post("/calculation/check_feasibility", json=payload)
 		assert response.status_code == 200
-		assert response.json() == {"feasible": False, "shortfall": 200_000}
+		result = response.json()
+		assert result["feasible"] is False
+		assert result["breach_count"] > 0
 
 	def test_check_feasibility_boundary_equal(self):
-		payload = {"annual_saving_required": 500_000, "max_possible_saving": 500_000}
+		# Disposable income = 150k (200k - 50k), 50% cap = 75k
+		payload = {
+			"starting_monthly_sip": 75_000,
+			"annual_step_up_pct": 0.0,  # No step-up for simplicity
+			"monthly_income": 200_000,
+			"income_raise_pct": 7.0,
+			"monthly_expenses": 50_000,
+			"years_to_goal": 3,
+			"existing_monthly_sip": 0.0,
+			"savings_cap_pct": 50.0
+		}
 		response = client.post("/calculation/check_feasibility", json=payload)
 		assert response.status_code == 200
-		assert response.json()["feasible"] is True
-		assert response.json()["shortfall"] == 0
+		result = response.json()
+		assert result["feasible"] is True
 
 
 class TestCheckRebalancingIntegration:
@@ -221,41 +253,38 @@ class TestCheckRebalancingIntegration:
 class TestStartingSipIntegration:
 	def test_starting_sip_happy_path(self):
 		payload = {
-			"target_corpus": 30_000_000,
+			"goal_amount": 30_000_000,
 			"pre_ret_return": 10,
 			"inflation_rate": 6,
 			"income_raise_pct": 8,
 			"years_to_goal": 20,
-			"annual_step_up_percent": 0,
 		}
 		response = client.post("/calculation/starting-sip", json=payload)
 		assert response.status_code == 200
-		sip = response.json()["starting_monthly_investment"]
+		sip = response.json()["starting_monthly_sip"]
 		assert sip > 0
 
 	def test_starting_sip_handles_r_equals_g_case(self):
 		payload = {
-			"target_corpus": 25_000_000,
+			"goal_amount": 25_000_000,
 			"pre_ret_return": 10,
 			"inflation_rate": 5,
 			"income_raise_pct": 15.5,
 			"years_to_goal": 15,
-			"annual_step_up_percent": 0,
 		}
 		response = client.post("/calculation/starting-sip", json=payload)
 		assert response.status_code == 200
-		sip = response.json()["starting_monthly_investment"]
+		sip = response.json()["starting_monthly_sip"]
 		assert math.isfinite(sip)
 		assert sip > 0
 
 	def test_starting_sip_zero_years_to_goal_returns_server_error(self):
 		payload = {
-			"target_corpus": 10_000_000,
+			"goal_amount": 10_000_000,
 			"pre_ret_return": 10,
 			"inflation_rate": 6,
 			"income_raise_pct": 8,
 			"years_to_goal": 0,
-			"annual_step_up_percent": 0,
 		}
 		response = client_no_raise.post("/calculation/starting-sip", json=payload)
 		assert response.status_code == 500
@@ -279,6 +308,7 @@ class TestGlidePathIntegration:
 		assert schedule[-1]["equity_percent"] == 50
 
 	def test_glide_path_same_current_and_goal_age(self):
+		"""Same age for current and goal should fail validation (422)."""
 		payload = {
 			"current_age": 40,
 			"goal_age": 40,
@@ -286,19 +316,20 @@ class TestGlidePathIntegration:
 			"end_equity_percent": 40,
 		}
 		response = client.post("/calculation/glide-path", json=payload)
-		assert response.status_code == 200
-		assert response.json()["yearly_allocation_table"] == []
+		# Validation should fail because goal_age must be > current_age
+		assert response.status_code == 422
 
 	def test_glide_path_goal_age_before_current_age(self):
+		"""Goal age before current age should fail validation (422)."""
 		payload = {
-			"current_age": 45,
+			"current_age": 50,
 			"goal_age": 40,
 			"start_equity_percent": 70,
-			"end_equity_percent": 40,
+			"end_equity_percent": 30,
 		}
 		response = client.post("/calculation/glide-path", json=payload)
-		assert response.status_code == 200
-		assert response.json()["yearly_allocation_table"] == []
+		# Validation should fail because goal_age must be > current_age
+		assert response.status_code == 422
 
 
 class TestDriftIntegration:

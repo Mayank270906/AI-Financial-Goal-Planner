@@ -1,13 +1,23 @@
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from app.schemas.user import Retirement, BucketAllocation
+from app.schemas.goals import OneTimeGoalRequest, RecurringGoalRequest
+from app.schemas.calculation import CheckFeasibilityRequest, SIPRequest, GlidePathRequest, SuggestedAllocation
+from app.services.math.calculation import calculate_sip, calculate_glide_path, check_feasibility, suggest_allocation
 import os
 from openai import OpenAI
 import datetime
 import json
 from dotenv import load_dotenv
 
+if TYPE_CHECKING:
+    from app.models.db import User
+
 # Load environment variables from .env file
 load_dotenv()
+
+
+def _non_negative(value: float) -> float:
+    return max(value, 0.0)
 
 
 def check_feasibility_retirement(r: Retirement, additional_monthly_sip: float) -> dict:
@@ -114,6 +124,8 @@ def compute_retirement_corpus(r: Retirement) -> dict:
     else:
         fv_sip = 0.0
 
+    fv_sip = _non_negative(fv_sip)
+
     # Step 6: Corpus gap
     corpus_gap = corpus_required - fv_corpus - fv_sip
 
@@ -137,14 +149,14 @@ def compute_retirement_corpus(r: Retirement) -> dict:
         )
 
     return {
-        "annual_expense_at_retirement": round(annual_expense_at_retirement, 2),
-        "income_at_retirement": round(income_at_retirement, 2),
-        "net_annual_withdrawal": round(net_withdrawal, 2),
-        "corpus_required": round(corpus_required, 2),
-        "fv_existing_corpus": round(fv_corpus, 2),
-        "fv_existing_sip": round(fv_sip, 2),
-        "corpus_gap": round(corpus_gap, 2),
-        "additional_monthly_sip_required": round(max(additional_sip_required, 0), 2),
+        "annual_expense_at_retirement": round(_non_negative(annual_expense_at_retirement), 2),
+        "income_at_retirement": round(_non_negative(income_at_retirement), 2),
+        "net_annual_withdrawal": round(_non_negative(net_withdrawal), 2),
+        "corpus_required": round(_non_negative(corpus_required), 2),
+        "fv_existing_corpus": round(_non_negative(fv_corpus), 2),
+        "fv_existing_sip": round(_non_negative(fv_sip), 2),
+        "corpus_gap": round(_non_negative(corpus_gap), 2),
+        "additional_monthly_sip_required": round(_non_negative(additional_sip_required), 2),
         "feasible": feasible,
     }
 
@@ -157,7 +169,8 @@ def compute_bucket_strategy(
     current_age_at_review: Optional[int] = None  # for glide path if reviewing mid-retirement
 ) -> dict:
     i = inflation_rate / 100
-    W = net_annual_withdrawal
+    corpus_required = _non_negative(corpus_required)
+    W = _non_negative(net_annual_withdrawal)
     review_age = current_age_at_review or retirement_age  # at retirement if first plan
 
     # ── Bucket 1: Years 1–3
@@ -249,9 +262,9 @@ def compute_bucket_strategy(
     unallocated = corpus_required - total_allocated
 
     return {
-        "corpus_required":    round(corpus_required, 2),
-        "total_allocated":    round(total_allocated, 2),
-        "unallocated_buffer": round(unallocated, 2),  # should be ~0 or small positive
+        "corpus_required":    round(_non_negative(corpus_required), 2),
+        "total_allocated":    round(_non_negative(total_allocated), 2),
+        "unallocated_buffer": round(_non_negative(unallocated), 2),  # should be ~0 or small positive
         "review_age":         review_age,
         "retirement_duration_years": life_expectancy - retirement_age,
         "buckets":            buckets,
@@ -559,3 +572,289 @@ def save_retirement_plan(db, user_id: str, plan: dict, retirement_age: int):
     db.commit()
     db.refresh(plan_record)
     return plan_record
+
+def one_time_goal(data: OneTimeGoalRequest, user: "User") -> dict:
+    # Extract user profile data from database
+    monthly_income = user.current_income / 12
+    monthly_expenses = user.current_monthly_expenses
+    inflation_rate = user.inflation_rate / 100
+    income_raise_pct = user.income_raise_pct / 100
+    current_age = user.age
+    
+    # Use default 50% savings cap (disposable income based)
+    savings_cap_pct = 50.0
+    
+    # Calculate required SIP with step-up
+    sip_report = calculate_sip(SIPRequest(
+        goal_amount=data.goal_amount,
+        years_to_goal=data.years_to_goal,
+        pre_ret_return=data.pre_ret_return,
+        inflation_rate=user.inflation_rate,  # as percentage
+        income_raise_pct=user.income_raise_pct  # as percentage
+    ))
+    
+    goal_target = sip_report["goal_at_target_date"]
+    starting_monthly_sip = sip_report["starting_monthly_sip"]
+    annual_step_up_pct = sip_report["annual_step_up_pct"]
+    
+    # Check feasibility against user's disposable income
+    feasibility_report = check_feasibility(CheckFeasibilityRequest(
+        starting_monthly_sip=starting_monthly_sip,
+        annual_step_up_pct=annual_step_up_pct,
+        monthly_income=monthly_income,
+        income_raise_pct=user.income_raise_pct,
+        monthly_expenses=monthly_expenses,
+        years_to_goal=int(data.years_to_goal),
+        existing_monthly_sip=data.existing_monthly_sip,
+        savings_cap_pct=savings_cap_pct
+    ))
+    
+    if not feasibility_report["feasible"]:
+        return {
+            "status": "infeasible",
+            "goal_name": data.goal_name,
+            "sip_report": sip_report,
+            "feasibility_report": feasibility_report,
+            "message": "This goal is not feasible with your current financial profile and assumptions.",
+            "suggestion": "Consider either: (1) Extending the timeline, (2) Reducing the goal amount, or (3) Increasing your income/reducing expenses."
+        }
+    
+    # Feasible — now calculate allocation and glide path
+    # Map risk tolerance to allocation adjustment
+    risk_map = {
+        "low": "low",
+        "moderate": "moderate", 
+        "high": "high"
+    }
+    risk_level = risk_map.get(data.risk_tolerance.lower(), "moderate")
+    
+    # Suggest allocation based on time horizon and risk
+    allocation = suggest_allocation(SuggestedAllocation(
+        years=int(data.years_to_goal),
+        risk=risk_level
+    ))
+    
+    equity_allocation = allocation["equity_allocation"]
+    debt_allocation = allocation["debt_allocation"]
+    
+    # Calculate glide path — gradually reduce equity as goal approaches
+    # Conservative approach: reduce to 10-20% equity near goal date
+    goal_age = current_age + int(data.years_to_goal)
+    
+    # End equity based on goal proximity: closer goals need more stability
+    if data.years_to_goal < 3:
+        end_equity = 10.0
+    elif data.years_to_goal < 5:
+        end_equity = 20.0
+    else:
+        end_equity = max(equity_allocation - 50, 10.0)
+    
+    glide_path = calculate_glide_path(GlidePathRequest(
+        current_age=current_age,
+        goal_age=goal_age,
+        start_equity_percent=equity_allocation,
+        end_equity_percent=end_equity
+    ))
+    
+    # Calculate FV of existing corpus
+    r = data.pre_ret_return / 100
+    n = data.years_to_goal
+    fv_existing_corpus = data.existing_corpus * (1 + r) ** n if data.existing_corpus > 0 else 0.0
+    
+    return {
+        "status": "feasible",
+        "goal_name": data.goal_name,
+        "goal_summary": {
+            "goal_amount_today": round(data.goal_amount, 2),
+            "goal_amount_at_target": round(goal_target, 2),
+            "years_to_goal": data.years_to_goal,
+            "target_age": goal_age,
+            "expected_return_pct": data.pre_ret_return,
+            "inflation_adjusted": True
+        },
+        "sip_plan": {
+            "starting_monthly_sip": round(starting_monthly_sip, 2),
+            "annual_step_up_pct": round(annual_step_up_pct, 2),
+            "existing_monthly_sip": data.existing_monthly_sip,
+            "total_first_year_sip": round(starting_monthly_sip + data.existing_monthly_sip, 2),
+            "existing_corpus": data.existing_corpus,
+            "fv_of_existing_corpus": round(fv_existing_corpus, 2)
+        },
+        "feasibility": feasibility_report,
+        "allocation": {
+            "initial_equity_pct": equity_allocation,
+            "initial_debt_pct": debt_allocation,
+            "final_equity_pct": end_equity,
+            "final_debt_pct": 100 - end_equity,
+            "risk_profile": data.risk_tolerance
+        },
+        "glide_path": glide_path
+    }
+    
+def build_onetime_goal_ai_payload(plan: dict) -> dict:
+
+    # Pre-format glide path as explicit string table
+    # Forces model to copy text, not reconstruct numbers
+    glide_rows = []
+    for row in plan["glide_path"]["yearly_allocation_table"]:
+        glide_rows.append(
+            f"Year {row['year']} (Age {row['age']}): "
+            f"equity {row['equity_percent']}%, "
+            f"debt {row['debt_percent']}%"
+        )
+    glide_path_formatted = "\n".join(glide_rows)
+
+    return {
+        "goal_name":    plan["goal_name"],
+        "status":       plan["status"],
+        "goal_summary": {
+            "goal_amount_today":     format_inr(plan["goal_summary"]["goal_amount_today"]),
+            "goal_amount_at_target": format_inr(plan["goal_summary"]["goal_amount_at_target"]),
+            "years_to_goal":         plan["goal_summary"]["years_to_goal"],
+            "target_age":            plan["goal_summary"]["target_age"],
+            "expected_return_pct":   plan["goal_summary"]["expected_return_pct"],
+        },
+        "sip_plan": {
+            "starting_monthly_sip":  format_inr(plan["sip_plan"]["starting_monthly_sip"]),
+            "annual_step_up_pct":    plan["sip_plan"]["annual_step_up_pct"],
+            "existing_monthly_sip":  format_inr(plan["sip_plan"]["existing_monthly_sip"]),
+            "fv_of_existing_corpus": format_inr(plan["sip_plan"]["fv_of_existing_corpus"]),
+        },
+        "feasibility": {
+            "feasible":           plan["feasibility"]["feasible"],
+            "peak_savings_ratio": plan["feasibility"]["peak_savings_ratio"],
+            "breach_count":       plan["feasibility"]["breach_count"],
+            "first_breach_year":  plan["feasibility"]["first_breach_year"],
+            "monthly_shortfall":  format_inr(plan["feasibility"]["monthly_shortfall"]),
+            "yearly_summary":     plan["feasibility"]["yearly_summary"],
+        },
+        "glide_path": {
+            "start_equity_percent":   plan["glide_path"]["start_equity_percent"],
+            "end_equity_percent":     plan["glide_path"]["end_equity_percent"],
+            "total_years":            plan["glide_path"]["total_years"],
+
+            # Pre-formatted string — model copies this directly, no reconstruction
+            "yearly_allocation_table_formatted": glide_path_formatted,
+
+            # Keep raw table too for reference
+            "yearly_allocation_table": plan["glide_path"]["yearly_allocation_table"]
+        }
+    }
+      
+def explain_one_time_goal_with_ai(
+    goal_plan: dict,
+    user_question: Optional[str] = None
+) -> str:
+    
+    hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        return "Error: HF_TOKEN not found in environment variables"
+    
+    # Remove quotes if present in the token
+    hf_token = hf_token.strip('"').strip("'")
+    
+    # Load prompts from file
+    prompt_file_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "one_time_agent_prompt.txt"
+    )
+    
+    try:
+        with open(prompt_file_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+    except FileNotFoundError:
+        return f"Error: System prompt file not found at {prompt_file_path}"
+    
+    # Parse SYSTEM_PROMPT and INITIAL_USER_PROMPT from file
+    try:
+        # Extract SYSTEM_PROMPT (everything between SYSTEM_PROMPT = """ and the next """)
+        system_start = file_content.find('SYSTEM_PROMPT = """') + len('SYSTEM_PROMPT = """')
+        system_end = file_content.find('"""', system_start)
+        system_prompt_template = file_content[system_start:system_end]
+        
+        # Extract INITIAL_USER_PROMPT
+        if goal_plan["status"] == "feasible":
+            initial_prompt= 'ONETIME_GOAL_INITIAL_USER_PROMPT_FEASIBLE = """'
+        else:
+            initial_prompt= 'ONETIME_GOAL_INITIAL_USER_PROMPT_INFEASIBLE = """'
+        initial_start = file_content.find(initial_prompt) + len(initial_prompt)
+        initial_end = file_content.find('"""', initial_start)
+        initial_user_prompt = file_content[initial_start:initial_end]
+        
+    except Exception as e:
+        return f"Error parsing prompt file: {str(e)}"
+    
+    # Use the default comprehensive prompt if no specific question is provided
+    if user_question is None:
+        user_question = initial_user_prompt
+    
+    # Get current date
+    current_date = datetime.datetime.now().strftime("%B %d, %Y")
+    
+    # Build formatted payload with INR formatting
+    formatted_payload = build_onetime_goal_ai_payload(goal_plan)
+    plan_payload_json = json.dumps(formatted_payload, indent=2)
+    
+    print(formatted_payload["glide_path"])
+    
+    system_prompt = system_prompt_template.format(
+        current_date=current_date,
+        plan_payload=plan_payload_json
+    )
+    
+    # Initialize OpenAI client with HuggingFace
+    try:
+        client = OpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=hf_token,
+        )
+        
+        # Get AI explanation
+        completion = client.chat.completions.create(
+            model="MiniMaxAI/MiniMax-M2.5:fastest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_question
+                }
+            ],
+            max_tokens=10000,
+            temperature=0.1
+        )
+        
+        return completion.choices[0].message.content
+    
+    except Exception as e:
+        return f"Error generating AI explanation: {str(e)}"
+    
+
+def save_one_time_goal_plan(db, user_id: str, plan: dict):
+    """Save one-time goal plan to database"""
+    from app.models.db import GoalPlan
+    import json
+    
+    # Convert plan to JSON string for storage
+    plan_json = json.dumps(plan, default=str)
+    
+    plan_record = GoalPlan(
+        user_id=user_id,
+        goal_data=plan_json,
+        goal_type="one_time",
+        goal_name=plan.get("goal_name", "Unnamed Goal"),
+        target_amount=plan.get("goal_summary", {}).get("goal_amount_today", 0.0),
+        future_value=plan.get("goal_summary", {}).get("goal_amount_at_target", 0.0),
+        monthly_sip_required=plan.get("sip_plan", {}).get("starting_monthly_sip", 0.0),
+        time_horizon_years=int(plan.get("goal_summary", {}).get("years_to_goal", 0)),
+        status=plan.get("status", "unknown"),
+        is_active=True,
+        priority=1
+    )
+    db.add(plan_record)
+    db.commit()
+    db.refresh(plan_record)
+    return plan_record
+

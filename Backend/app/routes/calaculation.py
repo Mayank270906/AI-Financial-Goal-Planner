@@ -4,7 +4,7 @@ from app.schemas.calculation import (
     BlendedReturn,
     RequiredAnnualSavings,
     SuggestedAllocation,
-    CheckFeasibility,
+    CheckFeasibilityRequest,
     CheckRebalancing,
     SIPRequest,
     GlidePathRequest,
@@ -58,7 +58,7 @@ def calculate_suggested_allocation(data: SuggestedAllocation):
     return suggest_allocation(data)
 
 @router.post("/check_feasibility")
-def calculate_feasibility(data: CheckFeasibility):
+def calculate_feasibility(data: CheckFeasibilityRequest):
     return check_feasibility(data)
 
 @router.post("/check_rebalancing")

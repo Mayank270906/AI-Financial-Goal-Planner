@@ -4,7 +4,7 @@ from app.schemas.calculation import (
     BlendedReturn, 
     RequiredAnnualSavings, 
     SuggestedAllocation,
-    CheckFeasibility,
+    CheckFeasibilityRequest,
     CheckRebalancing,
     SIPRequest,
     GlidePathRequest,
@@ -59,6 +59,9 @@ def suggest_allocation(data: SuggestedAllocation):
     
     if risk.lower() == "low":
         equity_pct = max(0, equity_pct - 20)
+    elif risk.lower() == "moderate":
+        # Keep the base allocation as-is
+        pass
     elif risk.lower() == "high":
         equity_pct = min(100, equity_pct + 20)
     
@@ -67,15 +70,95 @@ def suggest_allocation(data: SuggestedAllocation):
     return {"equity_allocation": equity_pct, "debt_allocation": debt_pct}
 
 
-def check_feasibility(data: CheckFeasibility):
-    annual_saving_required = data.annual_saving_required
-    max_possible_saving = data.max_possible_saving
-    
-    feasible = annual_saving_required <= max_possible_saving
-    
-    return {"feasible": feasible, "shortfall": max(0, annual_saving_required - max_possible_saving)}
+def check_feasibility(data: CheckFeasibilityRequest) -> dict:
+    g_income   = data.income_raise_pct / 100
+    g_sip      = data.annual_step_up_pct / 100
+    g_expenses = 0.05                          # conservative fixed expense growth
+    cap        = data.savings_cap_pct / 100
 
+    breach_years    = []
+    yearly_summary  = []
+    peak_ratio      = 0.0
 
+    for year in range(1, data.years_to_goal + 1):
+        t = year - 1   # index from 0
+
+        # Income and expenses grow each year
+        monthly_income   = data.monthly_income   * (1 + g_income)   ** t
+        monthly_expenses = data.monthly_expenses * (1 + g_expenses) ** t
+
+        # Disposable income = what remains after fixed expenses
+        disposable       = monthly_income - monthly_expenses
+
+        # This goal's SIP steps up at derived real rate
+        this_goal_sip    = data.starting_monthly_sip * (1 + g_sip) ** t
+
+        # Existing committed SIPs also step up at same real rate
+        existing_sip     = data.existing_monthly_sip * (1 + g_sip) ** t
+
+        # Total SIP burden this year
+        total_sip        = this_goal_sip + existing_sip
+
+        # Savings ratio against disposable income
+        ratio            = (total_sip / disposable) if disposable > 0 else float("inf")
+        within_cap       = ratio <= cap
+        peak_ratio       = max(peak_ratio, ratio)
+
+        record = {
+            "year":                   year,
+            "monthly_income":         round(monthly_income,   2),
+            "monthly_expenses":       round(monthly_expenses, 2),
+            "disposable_income":      round(disposable,       2),
+            "this_goal_sip":          round(this_goal_sip,    2),
+            "existing_sip":           round(existing_sip,     2),
+            "total_sip":              round(total_sip,        2),
+            "savings_ratio_pct":      round(ratio * 100,      1),
+            "cap_pct":                data.savings_cap_pct,
+            "within_cap":             within_cap,
+        }
+
+        yearly_summary.append(record)
+
+        if not within_cap:
+            breach_years.append(record)
+
+    feasible         = len(breach_years) == 0
+    shortfall_year1  = max(
+        0,
+        data.starting_monthly_sip + data.existing_monthly_sip
+        - (data.monthly_income - data.monthly_expenses) * cap
+    )
+
+    return {
+        # Top-level verdict
+        "feasible":             feasible,
+        "status":               "feasible" if feasible else "infeasible",
+
+        # Shortfall context (only meaningful if infeasible)
+        "monthly_shortfall":    round(shortfall_year1, 2) if not feasible else 0.0,
+
+        # Breach summary
+        "breach_count":         len(breach_years),
+        "first_breach_year":    breach_years[0]["year"] if breach_years else None,
+        "first_breach_ratio":   round(breach_years[0]["savings_ratio_pct"], 1) if breach_years else None,
+        "peak_savings_ratio":   round(peak_ratio * 100, 1),
+
+        # Year-by-year detail
+        "yearly_summary":       yearly_summary,
+        "breach_years":         breach_years,
+
+        # Input echo for transparency
+        "inputs": {
+            "starting_monthly_sip":  data.starting_monthly_sip,
+            "existing_monthly_sip":  data.existing_monthly_sip,
+            "annual_step_up_pct":    data.annual_step_up_pct,
+            "monthly_income":        data.monthly_income,
+            "monthly_expenses":      data.monthly_expenses,
+            "income_raise_pct":      data.income_raise_pct,
+            "savings_cap_pct":       data.savings_cap_pct,
+            "years_to_goal":         data.years_to_goal,
+        }
+    }
 
 def check_rebalancing(data: CheckRebalancing):
     planned_alloc = data.planned_alloc
@@ -96,53 +179,75 @@ def check_rebalancing(data: CheckRebalancing):
 
 # Phase 1 Implementation
 
-def calculate_sip(data: SIPRequest):
-    target_corpus = data.target_corpus
-    r = data.pre_ret_return / 100
-    inflation_rate = data.inflation_rate / 100
-    income_raise_pct = data.income_raise_pct / 100
-    n_years = data.years_to_goal
-
-    # Derive real step-up rate from income growth adjusted for inflation
-    g = ((1 + income_raise_pct) / (1 + inflation_rate)) - 1
+def calculate_sip(data: SIPRequest) -> dict:
+    r = data.pre_ret_return/100
+    n = data.years_to_goal
+    i = data.inflation_rate/100
+    income_raise = data.income_raise_pct/100
     
-    # Prevent division by zero if r ≈ g
+    #Caluclating the future value of the goal
+    future_goal = future_value_goal(FutureValue(
+        principal=data.goal_amount,
+        infation_rate=data.inflation_rate,  # Note: schema has typo 'infation_rate'
+        years=data.years_to_goal
+    ))["future_value"]
+    
+    #Step-up fisher equation
+    g = ((1 + income_raise) / (1 + i)) - 1
+    
     if abs(r - g) < 1e-9:
-        g += 1e-9
+        # Edge case: return ≈ step-up rate, use linear approximation
+        annual_sip = future_goal / (n * (1 + r) ** (n - 1))
+    else:
+        annual_sip = (
+            future_goal * (r - g)
+            / (((1 + r) ** n - (1 + g) ** n) * (1 + r / 12))
+        )
+    
+    starting_monthly_sip = annual_sip / 12
 
-    numerator = target_corpus * (r - g)
-    denominator = (((1 + r) ** n_years) - ((1 + g) ** n_years)) * (1 + r)
+    return {
+        "goal_today":              round(data.goal_amount, 2),
+        "goal_at_target_date":     round(future_goal, 2),
+        "starting_monthly_sip":    round(starting_monthly_sip, 2),
+        "annual_step_up_pct":      round(g * 100, 4),
+        "years_to_goal":           n,
+        "inflation_rate_pct":      data.inflation_rate,
+        "income_raise_pct":        data.income_raise_pct,
+        "expected_return_pct":     data.pre_ret_return,
+    }
     
-    starting_sip = (numerator / denominator) / 12
     
-    return {"starting_monthly_investment": round(starting_sip, 2)}
-
-def calculate_glide_path(data: GlidePathRequest):
-    current_age = data.current_age
-    goal_age = data.goal_age
-    e_start = data.start_equity_percent
-    e_end = data.end_equity_percent
-    
-    total_years = goal_age - current_age
-    if total_years <= 0:
-        return {"yearly_allocation_table": []}
+def calculate_glide_path(data: GlidePathRequest) -> dict:
+    current_age  = data.current_age
+    goal_age     = data.goal_age
+    e_start      = data.start_equity_percent
+    e_end        = data.end_equity_percent
+    total_years  = goal_age - current_age
 
     schedule = []
-    # t moves from 0 to total_years
-    for t in range(total_years + 1): # Include the goal year? "between now and the goal year N"
-        # If t=0, equity = start. If t=T, equity = end.
-        equity_weight = e_start - ((e_start - e_end) / total_years) * t
-        debt_weight = 100 - equity_weight
-        
-        schedule.append({
-            "year": current_age + t,
-            "age": current_age + t,
-            "equity_percent": round(equity_weight, 2),
-            "debt_percent": round(debt_weight, 2)
-        })
-        
-    return {"yearly_allocation_table": schedule}
 
+    for t in range(total_years + 1):
+        equity = e_start - ((e_start - e_end) / total_years) * t
+        debt   = 100 - equity
+
+        schedule.append({
+            "year":           current_age + t,    # actual age: 30, 31, 32...
+            "age":            current_age + t,    # actual age: 30, 31, 32...
+            "equity_percent": round(equity, 2),
+            "debt_percent":   round(debt, 2)
+        })
+
+    return {
+        "current_age":          current_age,
+        "goal_age":             goal_age,
+        "total_years":          total_years,
+        "start_equity_percent": e_start,
+        "end_equity_percent":   e_end,
+        "yearly_allocation_table": schedule
+    }
+    
+    
 def check_portfolio_rebalance(data: RebalanceRequest):
     current_equity = data.current_equity_value
     current_debt = data.current_debt_value
