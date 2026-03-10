@@ -38,6 +38,10 @@ class User(Base):
     pre_retirement_return       = Column(Float, default=10.0)
     post_retirement_return      = Column(Float, default=7.0)
 
+    # Conflict engine corridor settings — user-adjustable
+    savings_pct                 = Column(Float, default=20.0)  # minimum savings floor (7-40%)
+    buffer_pct                  = Column(Float, default=10.0)  # emergency buffer (5-20%)
+
     # Onboarding state
     onboarding_complete = Column(Boolean, default=False)
     onboarding_step     = Column(Integer, default=0)
@@ -85,3 +89,65 @@ class GoalPlan(Base):
     
     priority    = Column(Integer, nullable=True)
     is_active   = Column(Boolean, default=True)
+
+
+class OneTimeGoalPlan(Base):
+    __tablename__ = "one_time_goal_plans"
+
+    id          = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id     = Column(String(36), nullable=False, index=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+    goal_name   = Column(String(255), nullable=False)
+
+    # Financial summary fields
+    target_amount        = Column(Float, nullable=True)
+    future_value         = Column(Float, nullable=True)
+    monthly_sip_required = Column(Float, nullable=True)
+    time_horizon_years   = Column(Integer, nullable=True)
+    status               = Column(String(20), nullable=True)
+
+    goal_data   = Column(Text, nullable=False)
+
+    priority    = Column(Integer, nullable=True)
+    is_active   = Column(Boolean, default=True)
+
+
+class RecurringGoalPlan(Base):
+    __tablename__ = "recurring_goal_plans"
+
+    id          = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id     = Column(String(36), nullable=False, index=True)
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+    goal_name   = Column(String(255), nullable=False)
+
+    # Financial summary fields
+    target_amount        = Column(Float, nullable=True)
+    future_value         = Column(Float, nullable=True)
+    monthly_sip_required = Column(Float, nullable=True)
+    time_horizon_years   = Column(Integer, nullable=True)
+    status               = Column(String(20), nullable=True)
+
+    goal_data   = Column(Text, nullable=False)
+
+    priority    = Column(Integer, nullable=True)
+    is_active   = Column(Boolean, default=True)
+    
+class ConflictResults(Base):
+    __tablename__ = "conflict_results"
+    
+    id          = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id     = Column(String(36), nullable=False, index=True)
+    computed_at  = Column(DateTime, default=datetime.utcnow)
+    
+    overall_status        = Column(String(20), nullable=True)
+    ceiling_breach_count  = Column(Integer, nullable=True)
+    floor_breach_count    = Column(Integer, nullable=True)
+    deferred_goal_count   = Column(Integer, nullable=True)
+    funded_goal_count     = Column(Integer, nullable=True)
+    
+    result_data  = Column(Text, nullable=False)  # Full result stored as JSON string
+    
+    is_latest    = Column(Boolean, default=True)
+    

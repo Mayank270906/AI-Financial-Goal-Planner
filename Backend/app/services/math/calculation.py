@@ -10,6 +10,15 @@ from app.schemas.calculation import (
     GlidePathRequest,
     RebalanceRequest
 )
+from app.utils.log_format import JSONFormatter
+import logging
+from datetime import datetime
+
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())
+logger = logging.getLogger("maths_services")
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 
 
@@ -18,7 +27,13 @@ def future_value_goal(data: FutureValue):
     inflation = data.infation_rate/100
     years = data.years
     
+    time_start = datetime.now()
     future_value = P * ((1 + inflation) ** years)
+    time_end = datetime.now()
+    logger.info({
+        "event": "Future value calculated",
+        "time_taken_seconds": (time_end - time_start).total_seconds()
+    })
     return {"future_value": future_value}
 
 
@@ -37,12 +52,19 @@ def required_annual_saving(data: RequiredAnnualSavings):
     r = data.return_rate/100
     years = data.years
     current_savings = 0
+
+    time_start = datetime.now()
     
     if r == 0:
         required_saving = (FV_goal - current_savings) / years
     else:
         required_saving = (FV_goal - current_savings * ((1 + r) ** years)) / (((1 + r) ** years - 1) / r)
     
+    time_end = datetime.now()
+    logger.info({
+        "event": "Required annual saving calculated",
+        "time_taken_seconds": (time_end - time_start).total_seconds()
+    })
     return {"required_annual_saving": required_saving}
 
 
@@ -50,6 +72,7 @@ def suggest_allocation(data: SuggestedAllocation):
     years = data.years
     risk = data.risk
     
+    time_start = datetime.now()
     if years < 3:
         equity_pct = 20
     elif years < 7:
@@ -66,6 +89,11 @@ def suggest_allocation(data: SuggestedAllocation):
         equity_pct = min(100, equity_pct + 20)
     
     debt_pct = 100 - equity_pct
+    time_end = datetime.now()
+    logger.info({
+        "event": "Suggested allocation calculated",
+        "time_taken_seconds": (time_end - time_start).total_seconds()
+    })
     
     return {"equity_allocation": equity_pct, "debt_allocation": debt_pct}
 
@@ -79,6 +107,8 @@ def check_feasibility(data: CheckFeasibilityRequest) -> dict:
     breach_years    = []
     yearly_summary  = []
     peak_ratio      = 0.0
+    
+    time_start = datetime.now()
 
     for year in range(1, data.years_to_goal + 1):
         t = year - 1   # index from 0
@@ -128,6 +158,15 @@ def check_feasibility(data: CheckFeasibilityRequest) -> dict:
         data.starting_monthly_sip + data.existing_monthly_sip
         - (data.monthly_income - data.monthly_expenses) * cap
     )
+    
+    timeend=datetime.now()
+    logger.info({
+        "event": "Feasibility check completed",
+        "time_taken_seconds": (timeend - time_start).total_seconds(),
+        "feasible": feasible,
+        "peak_savings_ratio_pct": round(peak_ratio * 100, 1),
+        "breach_count": len(breach_years)
+    })
 
     return {
         # Top-level verdict
@@ -185,6 +224,7 @@ def calculate_sip(data: SIPRequest) -> dict:
     i = data.inflation_rate/100
     income_raise = data.income_raise_pct/100
     
+    time_start = datetime.now()
     #Caluclating the future value of the goal
     future_goal = future_value_goal(FutureValue(
         principal=data.goal_amount,
@@ -205,6 +245,15 @@ def calculate_sip(data: SIPRequest) -> dict:
         )
     
     starting_monthly_sip = annual_sip / 12
+    
+    time_end = datetime.now()
+    logger.info({
+        "event": "SIP calculated",
+        "time_taken_seconds": (time_end - time_start).total_seconds(),
+        "future_goal": round(future_goal, 2),
+        "annual_sip": round(annual_sip, 2),
+        "starting_monthly_sip": round(starting_monthly_sip, 2)
+    })
 
     return {
         "goal_today":              round(data.goal_amount, 2),
@@ -226,17 +275,27 @@ def calculate_glide_path(data: GlidePathRequest) -> dict:
     total_years  = goal_age - current_age
 
     schedule = []
+    
+    time_start = datetime.now()
 
     for t in range(total_years + 1):
         equity = e_start - ((e_start - e_end) / total_years) * t
         debt   = 100 - equity
 
         schedule.append({
-            "year":           current_age + t,    # actual age: 30, 31, 32...
-            "age":            current_age + t,    # actual age: 30, 31, 32...
+            "year":           current_age + t+1,    # actual age: 31, 32...
+            "age":            current_age + t,    # actual age: 31, 32...
             "equity_percent": round(equity, 2),
             "debt_percent":   round(debt, 2)
         })
+    time_end=datetime.now()
+    logger.info({
+        "event": "Glide path calculated",
+        "time_taken_seconds": (time_end - time_start).total_seconds(),
+        "start_equity_percent": e_start,   
+        "end_equity_percent": e_end,
+        "total_years": total_years
+    })
 
     return {
         "current_age":          current_age,

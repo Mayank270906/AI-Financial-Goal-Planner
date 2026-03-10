@@ -1,6 +1,3 @@
-"""
-Test suite for calculation.py functions: future_value, feasibility, allocation, glide_path, and SIP.
-"""
 
 import pytest
 from app.schemas.calculation import (

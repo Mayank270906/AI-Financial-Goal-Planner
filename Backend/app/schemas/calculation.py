@@ -82,3 +82,27 @@ class RebalanceRequest(BaseModel):
     current_equity_value: float
     current_debt_value: float
     current_year_target_ratio: float  
+
+class ConflictEngineRequest(BaseModel):
+    # All active goal plans from DB
+    retirement_plan:  dict | None
+    onetime_goals:    list[dict] = []
+    recurring_goals:  list[dict] = []
+
+    # User profile from DB
+    monthly_income:   float
+    monthly_expenses: float
+    income_raise_pct: float
+
+    # Priority order — list of goal_ids, retirement always first
+    priority_order:   list[str]
+
+    # Corridor config — user-adjustable floor, fixed ceiling and buffer
+    savings_pct:        float = Field(default=20.0, ge=7.0, le=40.0)
+    buffer_pct:       float = Field(default=10.0, ge=5.0, le=20.0)    # user-adjustable buffer within corridor
+    ceiling_pct:      float = Field(default=None)    # computed as 100 - (savings_pct + buffer_pct)
+
+    @model_validator(mode="after")
+    def calculate_ceiling(self):
+        self.ceiling_pct = 100.0 - (self.savings_pct + self.buffer_pct)
+        return self

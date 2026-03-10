@@ -1,23 +1,41 @@
 from fastapi import APIRouter, Form, Depends, HTTPException
 from app.schemas.user import Retirement, ExplainRetirementRequest, ExplainOneTimeGoalRequest
-from app.schemas.goals import OneTimeGoalRequest
-from app.services.math.goals import get_retirement_plan, explain_retirement_plan_with_ai, save_retirement_plan, one_time_goal, explain_one_time_goal_with_ai, save_one_time_goal_plan
+from app.schemas.goals import OneTimeGoalRequest, RecurringGoalRequest
+from pydantic import ValidationError
+from app.services.math.goals import get_retirement_plan, explain_retirement_plan_with_ai, save_retirement_plan, one_time_goal, explain_one_time_goal_with_ai, save_one_time_goal_plan, compute_recurring_goal, save_recurring_goal_plan
 from app.databse import get_db
-from app.models.db import User, GoalPlan
-from typing import Optional
+from app.models.db import User
 from app.routes.auth import get_current_user
+from app.services.math.conflict_engine import run_and_save_conflict_engine
 from sqlalchemy.orm import Session
 import json
+from app.utils.log_format import JSONFormatter
+import logging
 
-
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())
+logger = logging.getLogger("goals_router")
+if not logger.handlers:
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 
 
 router = APIRouter(prefix="/goals", tags=["goals"])
 
 
+def _validation_error_detail(exc: ValidationError) -> str:
+    errors = exc.errors()
+    if not errors:
+        return "Validation failed"
+    first = errors[0]
+    ctx = first.get("ctx") or {}
+    return str(ctx.get("error", first.get("msg", "Validation failed")))
+
+
+# Retirement Planning Endpoint
 @router.post("/retirement")
-def endpoint_retirement(
+async def endpoint_retirement(
     retirement_age: int = Form(..., ge=35, le=80, description="Target Retirement Age"),
     post_retirement_expense_pct: float = Form(..., gt=0, le=100, description="Post-retirement expenses as % of pre-retirement expenses"),
     post_retirement_return: float = Form(7.0, gt=0, le=20, description="Expected annual return on retirement corpus post-retirement (%)"),
@@ -30,9 +48,18 @@ def endpoint_retirement(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    
+    logger.info({
+        "event": "retirement_plan_request",
+        "user_id": current_user.id if current_user else None,
+    })
+
     # User already fetched from DB by get_current_user dependency
     if not current_user:
+        logger.error({
+            "event": "retirement_plan_failed",
+            "reason": "user_not_found",
+            "status_code": 404,
+        })
         raise HTTPException(status_code=404, detail="User not found. Please complete the onboarding first.")
     
     # Build Retirement object with user data from DB and endpoint parameters
@@ -78,26 +105,59 @@ def endpoint_retirement(
             plan=plan_json,
             retirement_age=retirement_age,
         )
-        print(f"✓ Retirement plan saved for user {current_user.id}")
+        logger.info({
+            "event": "retirement_plan_saved",
+            "user_id": current_user.id,
+        })
     except Exception as e:
-        # Log error but don't fail the response - plan calculation is more important
-        print(f"Warning: Failed to save retirement plan to database: {type(e).__name__}: {str(e)}")
+        logger.warning({
+            "event": "retirement_plan_save_failed",
+            "user_id": current_user.id,
+            "error_type": type(e).__name__,
+            "error": str(e),
+        })
         import traceback
         traceback.print_exc()
+        
+        
+    conflict_results = await run_and_save_conflict_engine(user_id=current_user.id, db=db)
+    if conflict_results["overall_status"] == "all_clear":
+        logger.info({
+            "event": "conflict_engine_completed",
+            "user_id": current_user.id,
+            "overall_status": "all_clear",
+        })
+    else:
+        logger.warning({
+            "event": "conflict_engine_completed",
+            "user_id": current_user.id,
+            "overall_status": conflict_results.get("overall_status"),
+        })
+
+    logger.info({
+        "event": "retirement_plan_success",
+        "user_id": current_user.id,
+        "plan_status": plan.get("status") if isinstance(plan, dict) else None,
+    })
     
     return plan
 
 @router.post("/explain_retirement_plan")
 def endpoint_explain_retirement_plan(request: ExplainRetirementRequest):
+    logger.info({"event": "explain_retirement_plan_request"})
+    explanation = explain_retirement_plan_with_ai(
+        request.retirement_plan,
+        request.user_question
+    )
+    logger.info({"event": "explain_retirement_plan_success"})
     return {
-        "explanation": explain_retirement_plan_with_ai(
-            request.retirement_plan,
-            request.user_question
-        )
+        "explanation": explanation
     }
+    
+# One-Time Goal Planning Endpoint
 
 @router.post("/one_time_goal")
-def endpoint_one_time_goal(
+async def endpoint_one_time_goal(
     goal_name: str = Form(..., description="Name of the goal (e.g., 'Buy a Car', 'House Down Payment')"),
     goal_amount: float = Form(..., gt=0, description="Goal amount in today's value"),
     years_to_goal: float = Form(..., gt=0, le=50, description="Years until goal is needed"),
@@ -108,13 +168,31 @@ def endpoint_one_time_goal(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    logger.info({
+        "event": "one_time_goal_request",
+        "user_id": current_user.id if current_user else None,
+        "goal_name": goal_name,
+    })
 
     # User already fetched from DB by get_current_user dependency
     if not current_user:
+        logger.error({
+            "event": "one_time_goal_failed",
+            "reason": "user_not_found",
+            "status_code": 404,
+            "goal_name": goal_name,
+        })
         raise HTTPException(status_code=404, detail="User not found. Please complete the onboarding first.")
     
     # Validate that user has completed financial profile
     if not current_user.current_income or not current_user.current_monthly_expenses:
+        logger.error({
+            "event": "one_time_goal_failed",
+            "user_id": current_user.id,
+            "goal_name": goal_name,
+            "reason": "financial_profile_incomplete",
+            "status_code": 400,
+        })
         raise HTTPException(
             status_code=400, 
             detail="Financial profile incomplete. Please complete your income and expense details first."
@@ -137,20 +215,204 @@ def endpoint_one_time_goal(
     # Save plan to database
     try:
         save_one_time_goal_plan(db, current_user.id, plan)
-        print(f"✓ One-time goal plan '{goal_name}' saved for user {current_user.id}")
+        logger.info({
+            "event": "one_time_goal_saved",
+            "user_id": current_user.id,
+            "goal_name": goal_name,
+        })
     except Exception as e:
-        # Log error but don't fail the response - plan calculation is more important
-        print(f"Warning: Failed to save goal plan to database: {type(e).__name__}: {str(e)}")
+        logger.warning({
+            "event": "one_time_goal_save_failed",
+            "user_id": current_user.id,
+            "goal_name": goal_name,
+            "error_type": type(e).__name__,
+            "error": str(e),
+        })
         import traceback
         traceback.print_exc()
+        
+    conflict_results = await run_and_save_conflict_engine(user_id=current_user.id, db=db)
+    if conflict_results["overall_status"] == "all_clear":
+        logger.info({
+            "event": "conflict_engine_completed",
+            "user_id": current_user.id,
+            "overall_status": "all_clear",
+            "goal_name": goal_name,
+        })
+    else:
+        logger.warning({
+            "event": "conflict_engine_completed",
+            "user_id": current_user.id,
+            "overall_status": conflict_results.get("overall_status"),
+            "goal_name": goal_name,
+        })
+    
+    logger.info({
+        "event": "one_time_goal_success",
+        "user_id": current_user.id,
+        "goal_name": goal_name,
+        "plan_status": plan.get("status") if isinstance(plan, dict) else None,
+    })
+
     
     return plan
 
 @router.post("/explain_one_time_goal")
 def endpoint_explain_one_time_goal(request: ExplainOneTimeGoalRequest):
+    logger.info({"event": "explain_one_time_goal_request"})
+    explanation = explain_one_time_goal_with_ai(
+        request.goal_plan,
+        request.user_question
+    )
+    logger.info({"event": "explain_one_time_goal_success"})
     return {
-        "explanation": explain_one_time_goal_with_ai(
-            request.goal_plan,
-            request.user_question
-        )
+        "explanation": explanation
     }
+    
+# Recurring Goal Planning Endpoint
+
+@router.post("/recurring_goal")
+async def endpoint_recurring_goal(
+    goal_name : str = Form(..., description="Name of the goal (e.g., 'Vacation Every 3 years', 'Annual Gadget Upgrade')"),
+    current_cost : float = Form(..., gt=0, description="Current cost of the goal in today's value"),
+    years_to_first : int = Form(..., ge=0, description="Years until the first occurrence of the goal"),
+    frequency_years : int = Form(..., ge=1, description="Frequency of the goal in years (e.g., 3 for every 3 years)"),
+    num_occurrences : int = Form(..., ge=1, description="Total number of occurrences of the goal"),
+    goal_inflation_pct : float = Form(6.0, gt=0, le=20, description="Expected annual inflation rate for the goal (%)"),
+    expected_return_pct : float = Form(10.0, gt=1, le=20, description="Expected annual return on investments (%)"),
+    existing_corpus : float = Form(0.0, ge=0, description="Existing savings toward this recurring goal"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    ):
+    logger.info({
+        "event": "recurring_goal_request",
+        "user_id": current_user.id if current_user else None,
+        "goal_name": goal_name,
+    })
+
+    # User already fetched from DB by get_current_user dependency
+    if not current_user:
+        logger.error({
+            "event": "recurring_goal_failed",
+            "reason": "user_not_found",
+            "status_code": 404,
+            "goal_name": goal_name,
+        })
+        raise HTTPException(status_code=404, detail="User not found. Please complete the onboarding first.")
+    
+    # Validate that user has completed financial profile
+    if not current_user.current_income or not current_user.current_monthly_expenses:
+        logger.error({
+            "event": "recurring_goal_failed",
+            "user_id": current_user.id,
+            "goal_name": goal_name,
+            "reason": "financial_profile_incomplete",
+            "status_code": 400,
+        })
+        raise HTTPException(
+            status_code=400, 
+            detail="Financial profile incomplete. Please complete your income and expense details first."
+        )
+    
+    # Validate and construct RecurringGoalRequest
+    try:
+        data = RecurringGoalRequest(
+            goal_name=goal_name,
+            current_cost=current_cost,
+            years_to_first=years_to_first,
+            frequency_years=frequency_years,
+            num_occurrences=num_occurrences,
+            goal_inflation_pct=goal_inflation_pct,
+            expected_return_pct=expected_return_pct,
+            income_raise_pct=current_user.income_raise_pct,
+            monthly_income=current_user.current_income / 12,
+            monthly_expenses=current_user.current_monthly_expenses,
+            existing_corpus=existing_corpus
+        )
+    except ValidationError as e:
+        detail = _validation_error_detail(e)
+        logger.error({
+            "event": "recurring_goal_failed",
+            "user_id": current_user.id,
+            "goal_name": goal_name,
+            "reason": "validation_error",
+            "status_code": 422,
+            "error": detail,
+        })
+        raise HTTPException(
+            status_code=422,
+            detail=detail,
+        )
+    
+    plan = compute_recurring_goal(data)
+
+    try:
+        save_recurring_goal_plan(db, current_user.id, plan)
+        logger.info({
+            "event": "recurring_goal_saved",
+            "user_id": current_user.id,
+            "goal_name": goal_name,
+        })
+    except Exception as e:
+        logger.warning({
+            "event": "recurring_goal_save_failed",
+            "user_id": current_user.id,
+            "goal_name": goal_name,
+            "error_type": type(e).__name__,
+            "error": str(e),
+        })
+        import traceback
+        traceback.print_exc()
+        
+    conflict_results = await run_and_save_conflict_engine(user_id=current_user.id, db=db)
+    if conflict_results["overall_status"] == "all_clear":
+        logger.info({
+            "event": "conflict_engine_completed",
+            "user_id": current_user.id,
+            "overall_status": "all_clear",
+            "goal_name": goal_name,
+        })
+    else:
+        logger.warning({
+            "event": "conflict_engine_completed",
+            "user_id": current_user.id,
+            "overall_status": conflict_results.get("overall_status"),
+            "goal_name": goal_name,
+        })
+
+    logger.info({
+        "event": "recurring_goal_success",
+        "user_id": current_user.id,
+        "goal_name": goal_name,
+        "plan_status": plan.get("status") if isinstance(plan, dict) else None,
+    })
+    
+
+    return plan
+
+@router.get("/profile_overview")
+async def endpoint_profile_overview(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    logger.info({
+        "event": "profile_overview_request",
+        "user_id": current_user.id if current_user else None,
+    })
+
+    if not current_user:
+        logger.error({
+            "event": "profile_overview_failed",
+            "reason": "user_not_found",
+            "status_code": 404,
+        })
+        raise HTTPException(status_code=404, detail="User not found. Please complete the onboarding first.")
+    
+    results= await run_and_save_conflict_engine(user_id=current_user.id, db=db)
+    logger.info({
+        "event": "profile_overview_success",
+        "user_id": current_user.id,
+        "overall_status": results.get("overall_status"),
+    })
+
+    return results

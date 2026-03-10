@@ -8,12 +8,21 @@ from openai import OpenAI
 import datetime
 import json
 from dotenv import load_dotenv
+import logging
+from datetime import datetime
+from app.utils.log_format import JSONFormatter
 
 if TYPE_CHECKING:
     from app.models.db import User
 
 # Load environment variables from .env file
 load_dotenv()
+
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())
+logger = logging.getLogger("goal_services")
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 
 def _non_negative(value: float) -> float:
@@ -348,6 +357,7 @@ def compute_pre_retirement_glide_path(r: Retirement, monthly_sip: float) -> dict
 # ── Orchestrator: updated to include glide path ───────────────────
 def get_retirement_plan(r: Retirement) -> dict:
     # Step 1: Corpus and SIP
+    time_start = datetime.now()
     corpus_result = compute_retirement_corpus(r)
 
     # Step 2: Feasibility
@@ -383,6 +393,15 @@ def get_retirement_plan(r: Retirement) -> dict:
         life_expectancy       = r.life_expectancy,
         current_age_at_review = r.retirement_age
     )
+    
+    time_end = datetime.now()
+    logger.info({
+        "event": "Retirement plan computed",
+        "time_taken_seconds": (time_end - time_start).total_seconds(),
+        "feasible": feasibility["feasible"],
+        "corpus_required": corpus_result["corpus_required"],
+        "additional_monthly_sip_required": corpus_result["additional_monthly_sip_required"]
+    })
 
     return {
         "status":      "feasible",
@@ -533,6 +552,7 @@ def explain_retirement_plan_with_ai(
     
     # Initialize OpenAI client with HuggingFace
     try:
+        time_start=datetime.now()
         client = OpenAI(
             base_url="https://router.huggingface.co/v1",
             api_key=hf_token,
@@ -554,10 +574,26 @@ def explain_retirement_plan_with_ai(
             max_tokens=10000,
             temperature=0.7
         )
-        
+        timedelta = datetime.now() - time_start
+        logger.info({
+            "event": "AI explanation generated for retirement plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "time_taken_seconds": timedelta.total_seconds(),
+            "user_question_length": len(user_question),
+            "response_length": len(completion.choices[0].message.content),
+            "input_tokens": completion.choices[0].message.usage.input_tokens if hasattr(completion.choices[0].message.usage, 'input_tokens') else None,
+            "output_tokens": completion.choices[0].message.usage.output_tokens if hasattr(completion.choices[0].message.usage, 'output_tokens') else None,
+            "total_tokens": completion.choices[0].message.usage.total_tokens if hasattr(completion.choices[0].message.usage, 'total_tokens') else None
+        })  
         return completion.choices[0].message.content
     
     except Exception as e:
+        logger.info({
+            "event": "Error generating AI explanation for retirement plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "user_question_length": len(user_question),
+            "error": str(e),
+        })
         return f"Error generating AI explanation: {str(e)}"
     
 
@@ -573,6 +609,8 @@ def save_retirement_plan(db, user_id: str, plan: dict, retirement_age: int):
     db.refresh(plan_record)
     return plan_record
 
+#____________________________________One-Time Goal Planning Service____________________________
+
 def one_time_goal(data: OneTimeGoalRequest, user: "User") -> dict:
     # Extract user profile data from database
     monthly_income = user.current_income / 12
@@ -582,8 +620,9 @@ def one_time_goal(data: OneTimeGoalRequest, user: "User") -> dict:
     current_age = user.age
     
     # Use default 50% savings cap (disposable income based)
-    savings_cap_pct = 50.0
+    savings_cap_pct = user.savings_pct / 100 if user.savings_pct else 50
     
+    time_start = datetime.now()
     # Calculate required SIP with step-up
     sip_report = calculate_sip(SIPRequest(
         goal_amount=data.goal_amount,
@@ -657,9 +696,22 @@ def one_time_goal(data: OneTimeGoalRequest, user: "User") -> dict:
     ))
     
     # Calculate FV of existing corpus
-    r = data.pre_ret_return / 100
+    r = data.pre_ret_return /100
     n = data.years_to_goal
     fv_existing_corpus = data.existing_corpus * (1 + r) ** n if data.existing_corpus > 0 else 0.0
+    
+    time_end=datetime.now()
+    logger.info({
+        "event": "One-time goal plan computed",
+        "time_taken_seconds": (time_end - time_start).total_seconds(),
+        "feasible": feasibility_report["feasible"],
+        "goal_amount": data.goal_amount,
+        "goal_target_at_date": goal_target,
+        "starting_monthly_sip": starting_monthly_sip,
+        "annual_step_up_pct": annual_step_up_pct,
+        "equity_allocation_start": equity_allocation,
+        "equity_allocation_end": end_equity
+    })
     
     return {
         "status": "feasible",
@@ -795,7 +847,6 @@ def explain_one_time_goal_with_ai(
     formatted_payload = build_onetime_goal_ai_payload(goal_plan)
     plan_payload_json = json.dumps(formatted_payload, indent=2)
     
-    print(formatted_payload["glide_path"])
     
     system_prompt = system_prompt_template.format(
         current_date=current_date,
@@ -804,6 +855,394 @@ def explain_one_time_goal_with_ai(
     
     # Initialize OpenAI client with HuggingFace
     try:
+        time_start=datetime.now()
+        client = OpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=hf_token,
+        )
+        
+        # Get AI explanation
+        completion = client.chat.completions.create(
+            model="MiniMaxAI/MiniMax-M2.5:fastest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_question
+                }
+            ],
+            max_tokens=10000,
+            temperature=0.7
+        )
+        timedelta = datetime.now() - time_start
+        logger.info({
+            "event": "AI explanation generated for one time goal plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "time_taken_seconds": timedelta.total_seconds(),
+            "user_question_length": len(user_question),
+            "response_length": len(completion.choices[0].message.content),
+            "input_tokens": completion.choices[0].message.usage.input_tokens if hasattr(completion.choices[0].message.usage, 'input_tokens') else None,
+            "output_tokens": completion.choices[0].message.usage.output_tokens if hasattr(completion.choices[0].message.usage, 'output_tokens') else None,
+            "total_tokens": completion.choices[0].message.usage.total_tokens if hasattr(completion.choices[0].message.usage, 'total_tokens') else None
+        }) 
+        return completion.choices[0].message.content
+    
+    except Exception as e:
+        logger.info({
+            "event": "Error generating AI explanation for one-time goal plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "user_question_length": len(user_question),
+            "error": str(e),
+        })
+        return f"Error generating AI explanation: {str(e)}"
+    
+
+def save_one_time_goal_plan(db, user_id: str, plan: dict):
+    from app.models.db import OneTimeGoalPlan, RecurringGoalPlan
+
+    max_one_time_priority = db.query(OneTimeGoalPlan.priority).filter(
+        OneTimeGoalPlan.user_id == user_id,
+        OneTimeGoalPlan.is_active == True,
+    ).order_by(OneTimeGoalPlan.priority.desc()).first()
+
+    max_recurring_priority = db.query(RecurringGoalPlan.priority).filter(
+        RecurringGoalPlan.user_id == user_id,
+        RecurringGoalPlan.is_active == True,
+    ).order_by(RecurringGoalPlan.priority.desc()).first()
+
+    next_priority = max(
+        max_one_time_priority[0] if max_one_time_priority and max_one_time_priority[0] is not None else 1,
+        max_recurring_priority[0] if max_recurring_priority and max_recurring_priority[0] is not None else 1,
+    ) + 1
+    
+    # Convert plan to JSON string for storage
+    plan_json = json.dumps(plan, default=str)
+    
+    plan_record = OneTimeGoalPlan(
+        user_id=user_id,
+        goal_data=plan_json,
+        goal_name=plan.get("goal_name", "Unnamed Goal"),
+        target_amount=plan.get("goal_summary", {}).get("goal_amount_today", 0.0),
+        future_value=plan.get("goal_summary", {}).get("goal_amount_at_target", 0.0),
+        monthly_sip_required=plan.get("sip_plan", {}).get("starting_monthly_sip", 0.0),
+        time_horizon_years=int(plan.get("goal_summary", {}).get("years_to_goal", 0)),
+        status=plan.get("status", "unknown"),
+        is_active=True,
+        priority=next_priority
+    )
+    db.add(plan_record)
+    db.commit()
+    db.refresh(plan_record)
+    return plan_record
+
+
+def save_recurring_goal_plan(db, user_id: str, plan: dict):
+    from app.models.db import OneTimeGoalPlan, RecurringGoalPlan
+
+    max_one_time_priority = db.query(OneTimeGoalPlan.priority).filter(
+        OneTimeGoalPlan.user_id == user_id,
+        OneTimeGoalPlan.is_active == True,
+    ).order_by(OneTimeGoalPlan.priority.desc()).first()
+
+    max_recurring_priority = db.query(RecurringGoalPlan.priority).filter(
+        RecurringGoalPlan.user_id == user_id,
+        RecurringGoalPlan.is_active == True,
+    ).order_by(RecurringGoalPlan.priority.desc()).first()
+
+    next_priority = max(
+        max_one_time_priority[0] if max_one_time_priority and max_one_time_priority[0] is not None else 1,
+        max_recurring_priority[0] if max_recurring_priority and max_recurring_priority[0] is not None else 1,
+    ) + 1
+
+    plan_json = json.dumps(plan, default=str)
+
+    # Use first occurrence as quick target amount and planning years for dashboard fields.
+    first_occurrence = (plan.get("sip_plan", {}).get("occurrence_plans") or [{}])[0]
+
+    plan_record = RecurringGoalPlan(
+        user_id=user_id,
+        goal_data=plan_json,
+        goal_name=plan.get("goal_name", "Unnamed Goal"),
+        target_amount=first_occurrence.get("cost_at_target", 0.0),
+        future_value=first_occurrence.get("cost_at_target", 0.0),
+        monthly_sip_required=plan.get("sip_plan", {}).get("total_monthly_sip", 0.0),
+        time_horizon_years=int(plan.get("goal_summary", {}).get("total_planning_years", 0)),
+        status=plan.get("status", "unknown"),
+        is_active=True,
+        priority=next_priority,
+    )
+    db.add(plan_record)
+    db.commit()
+    db.refresh(plan_record)
+    return plan_record
+
+#____________________Recurrin Goal Planning Service___________________________
+
+def compute_occurrence_costs(data: RecurringGoalRequest) -> list[dict]:
+    i = data.goal_inflation_pct / 100
+
+    occurrences = []
+    for k in range(1, data.num_occurrences + 1):
+        years_to_k = data.years_to_first + (k - 1) * data.frequency_years
+        cost_at_k  = data.current_cost * (1 + i) ** years_to_k
+
+        occurrences.append({
+            "occurrence":     k,
+            "years_from_now": years_to_k,
+            "cost_at_target": round(cost_at_k, 2)
+        })
+
+    return occurrences
+
+
+def compute_sip_for_occurrence(
+    target_corpus:    float,
+    years_to_goal:    int,
+    r:                float,    # annual return
+    s:                float,    # real step-up rate (Fisher derived)
+) -> float:
+
+    if years_to_goal <= 0:
+        return 0.0
+
+    if abs(r - s) < 1e-9:
+        annual_sip = target_corpus / (
+            years_to_goal * (1 + r) ** (years_to_goal - 1)
+        )
+    else:
+        annual_sip = (
+            target_corpus * (r - s)
+            / (((1 + r) ** years_to_goal - (1 + s) ** years_to_goal)
+               * (1 + r / 12))
+        )
+
+    return annual_sip / 12   # monthly
+
+def apply_existing_corpus(
+    occurrence_costs: list[dict],
+    existing_corpus:  float,
+    r:                float,
+    years_to_first:   int
+) -> list[dict]:
+    
+    if existing_corpus <= 0:
+        return occurrence_costs
+
+    fv_corpus = existing_corpus * (1 + r) ** years_to_first
+
+    adjusted = []
+    for occ in occurrence_costs:
+        if occ["occurrence"] == 1:
+            adjusted_cost = max(0, occ["cost_at_target"] - fv_corpus)
+            adjusted.append({**occ, "cost_at_target": round(adjusted_cost, 2),
+                             "fv_existing_corpus": round(fv_corpus, 2)})
+        else:
+            adjusted.append({**occ, "fv_existing_corpus": 0.0})
+
+    return adjusted
+
+def compute_recurring_goal(data: RecurringGoalRequest) -> dict:
+    r = data.expected_return_pct / 100
+    i = data.goal_inflation_pct  / 100
+    g = data.income_raise_pct    / 100
+    s = ((1 + g) / (1 + i)) - 1     # derived real step-up rate
+    
+    if data.years_to_first <= 0:
+        logger.info({
+            "event":"Recurring goal",
+            "status": "infeasible",
+            "reason": "Goal is in the past or immediate. SIP not suitable."
+        })  
+        return {
+            "status": "infeasible",
+            "message": "If the goal is this year, use a lump sum, not a SIP."
+        }
+        
+    time_start=datetime.now()
+    # Step 1: cost at each occurrence
+    occurrences = compute_occurrence_costs(data)
+
+    # Step 2: adjust for existing corpus
+    occurrences = apply_existing_corpus(
+        occurrences,
+        data.existing_corpus,
+        r,
+        data.years_to_first
+    )
+
+    # Step 3: SIP per occurrence
+    total_monthly_sip = 0.0
+    occurrence_plans  = []
+
+    for occ in occurrences:
+        monthly_sip = compute_sip_for_occurrence(
+            target_corpus  = occ["cost_at_target"],
+            years_to_goal  = occ["years_from_now"],
+            r              = r,
+            s              = s
+        )
+        total_monthly_sip += monthly_sip
+
+        occurrence_plans.append({
+            **occ,
+            "monthly_sip": round(monthly_sip, 2)
+        })
+
+    # Step 4: feasibility across accumulation years
+    feasibility = check_feasibility(CheckFeasibilityRequest(
+        starting_monthly_sip = total_monthly_sip,
+        annual_step_up_pct   = round(s * 100, 4),
+        monthly_income       = data.monthly_income,
+        income_raise_pct     = data.income_raise_pct,
+        monthly_expenses     = data.monthly_expenses,
+        years_to_goal        = data.years_to_first +
+                               (data.num_occurrences - 1) * data.frequency_years,
+        existing_monthly_sip = 0.0,
+        savings_cap_pct      = 50.0
+    ))
+
+    # Step 5: glide path for each occurrence
+    glide_paths = []
+    
+    for occ in occurrence_plans:
+        years_to_occurrence = occ["years_from_now"]
+        
+        # Skip if occurrence is immediate (0 years) or has no SIP required
+        if years_to_occurrence <= 0 or occ["monthly_sip"] <= 0:
+            continue
+        
+        # Get allocation based on time horizon for this occurrence
+        allocation = suggest_allocation(SuggestedAllocation(
+            years=years_to_occurrence,
+            risk="moderate"
+        ))
+        
+        equity_allocation = allocation["equity_allocation"]
+        
+        # End equity based on goal proximity: closer goals need more stability
+        if years_to_occurrence < 3:
+            end_equity = 10.0
+        elif years_to_occurrence < 5:
+            end_equity = 20.0
+        else:
+            end_equity = max(equity_allocation - 50, 10.0)
+        
+        # Calculate glide path for this occurrence
+        glide_path = calculate_glide_path(GlidePathRequest(
+            current_age          = 0,      # use years, not age
+            goal_age             = years_to_occurrence,
+            start_equity_percent = equity_allocation,
+            end_equity_percent   = end_equity
+        ))
+        
+        glide_paths.append({
+            "occurrence":      occ["occurrence"],
+            "years_from_now":  years_to_occurrence,
+            "glide_path":      glide_path
+        })
+
+    status = "feasible" if feasibility["feasible"] else "infeasible"
+    
+    time_end=datetime.now()
+    logger.info({
+        "event": "Recurring goal plan computed",
+        "time_taken_seconds": (time_end - time_start).total_seconds(),
+        "status": status,
+        "total_monthly_sip": total_monthly_sip,
+        "feasible": feasibility["feasible"],
+        "num_occurrences": data.num_occurrences,
+        "years_to_first_occurrence": data.years_to_first
+    })
+    
+    return {
+        "status":             status,
+        "goal_name":          data.goal_name,
+        "goal_summary": {
+            "current_cost":         data.current_cost,
+            "goal_inflation_pct":   data.goal_inflation_pct,
+            "frequency_years":      data.frequency_years,
+            "num_occurrences":      data.num_occurrences,
+            "years_to_first":       data.years_to_first,
+            "total_planning_years": data.years_to_first +
+                                    (data.num_occurrences - 1) * data.frequency_years
+        },
+        "sip_plan": {
+            "total_monthly_sip":  round(total_monthly_sip, 2),
+            "sip_stepup_rate_pct": round(s * 100, 4),
+            "occurrence_plans":   occurrence_plans
+        },
+        "feasibility": feasibility,
+        "glide_paths":  glide_paths
+    }
+    
+
+    
+def explain_recurring_goal_with_ai(
+    goal_plan: dict,
+    user_question: Optional[str] = None
+) -> str:
+    
+    hf_token = os.getenv("HF_TOKEN")
+    if not hf_token:
+        return "Error: HF_TOKEN not found in environment variables"
+    
+    # Remove quotes if present in the token
+    hf_token = hf_token.strip('"').strip("'")
+    
+    # Load prompts from file
+    prompt_file_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "one_time_agent_prompt.txt"
+    )
+    
+    try:
+        with open(prompt_file_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+    except FileNotFoundError:
+        return f"Error: System prompt file not found at {prompt_file_path}"
+    
+    # Parse SYSTEM_PROMPT and INITIAL_USER_PROMPT from file
+    try:
+        # Extract SYSTEM_PROMPT (everything between SYSTEM_PROMPT = """ and the next """)
+        system_start = file_content.find('RECURRING_GOAL_SYSTEM_PROMPT = """') + len('RECURRING_GOAL_SYSTEM_PROMPT = """')
+        system_end = file_content.find('"""', system_start)
+        system_prompt_template = file_content[system_start:system_end]
+        
+        # Extract INITIAL_USER_PROMPT
+        if goal_plan["status"] == "feasible":
+            initial_prompt= 'RECURRING_GOAL_INITIAL_USER_PROMPT_FEASIBLE = """'
+        else:
+            initial_prompt= 'RECURRING_GOAL_INITIAL_USER_PROMPT_INFEASIBLE = """'
+        initial_start = file_content.find(initial_prompt) + len(initial_prompt)
+        initial_end = file_content.find('"""', initial_start)
+        initial_user_prompt = file_content[initial_start:initial_end]
+        
+    except Exception as e:
+        return f"Error parsing prompt file: {str(e)}"
+    
+    # Use the default comprehensive prompt if no specific question is provided
+    if user_question is None:
+        user_question = initial_user_prompt
+    
+    # Get current date
+    current_date = datetime.datetime.now().strftime("%B %d, %Y")
+    
+    # Build formatted payload with INR formatting
+    formatted_payload = build_onetime_goal_ai_payload(goal_plan)
+    plan_payload_json = json.dumps(formatted_payload, indent=2)
+    
+    
+    system_prompt = system_prompt_template.format(
+        current_date=current_date,
+        plan_payload=plan_payload_json
+    )
+    
+    # Initialize OpenAI client with HuggingFace
+    try:
+        time_start=datetime.now()
         client = OpenAI(
             base_url="https://router.huggingface.co/v1",
             api_key=hf_token,
@@ -825,36 +1264,27 @@ def explain_one_time_goal_with_ai(
             max_tokens=10000,
             temperature=0.1
         )
-        
+        timedelta = datetime.now() - time_start
+        logger.info({
+            "event": "AI explanation generated for recurrung goal plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "time_taken_seconds": timedelta.total_seconds(),
+            "user_question_length": len(user_question),
+            "response_length": len(completion.choices[0].message.content),
+            "input_tokens": completion.choices[0].message.usage.input_tokens if hasattr(completion.choices[0].message.usage, 'input_tokens') else None,
+            "output_tokens": completion.choices[0].message.usage.output_tokens if hasattr(completion.choices[0].message.usage, 'output_tokens') else None,
+            "total_tokens": completion.choices[0].message.usage.total_tokens if hasattr(completion.choices[0].message.usage, 'total_tokens') else None
+        }) 
         return completion.choices[0].message.content
     
     except Exception as e:
+        logger.info({
+            "event": "Error generating AI explanation for recurring plan",
+            "model": "MiniMaxAI/MiniMax-M2.5:novita",
+            "user_question_length": len(user_question),
+            "error": str(e),
+        })
         return f"Error generating AI explanation: {str(e)}"
     
 
-def save_one_time_goal_plan(db, user_id: str, plan: dict):
-    """Save one-time goal plan to database"""
-    from app.models.db import GoalPlan
-    import json
-    
-    # Convert plan to JSON string for storage
-    plan_json = json.dumps(plan, default=str)
-    
-    plan_record = GoalPlan(
-        user_id=user_id,
-        goal_data=plan_json,
-        goal_type="one_time",
-        goal_name=plan.get("goal_name", "Unnamed Goal"),
-        target_amount=plan.get("goal_summary", {}).get("goal_amount_today", 0.0),
-        future_value=plan.get("goal_summary", {}).get("goal_amount_at_target", 0.0),
-        monthly_sip_required=plan.get("sip_plan", {}).get("starting_monthly_sip", 0.0),
-        time_horizon_years=int(plan.get("goal_summary", {}).get("years_to_goal", 0)),
-        status=plan.get("status", "unknown"),
-        is_active=True,
-        priority=1
-    )
-    db.add(plan_record)
-    db.commit()
-    db.refresh(plan_record)
-    return plan_record
 

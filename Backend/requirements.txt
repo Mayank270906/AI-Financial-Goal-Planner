@@ -4,7 +4,7 @@ pydantic
 python-dotenv
 openai
 sqlalchemy
-pymysql
+psycopg2-binary
 authlib
 python-multipart
 passlib==1.7.4

@@ -7,6 +7,16 @@ from app.models.db import User
 from app.services.auth import create_access_token, verify_tokens
 from app.services.utils import verify_password
 
+from app.utils.log_format import JSONFormatter
+import logging
+
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())
+logger = logging.getLogger("auth_router")
+if not logger.handlers:
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
 router = APIRouter(prefix="/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
@@ -14,6 +24,10 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
+        logger.warning({
+            "event": "Failed login attempt",
+            "username": form_data.username
+        })
         raise HTTPException(
             status_code=401,
             detail="Invalid username or password",
@@ -21,6 +35,10 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         )
 
     access_token = create_access_token(data={"sub": user.id})
+    logger.info({
+        "event": "Successful login",
+        "username": form_data.username
+    })
     return {"access_token": access_token, "token_type": "bearer"}
 
 def decode_token(token: str = Depends(oauth2_scheme)):
@@ -32,6 +50,10 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if not user:
         user = db.query(User).filter(User.email == subject).first()
     if not user:
+        logger.warning({
+            "event": "User not found for token",
+            "token": token
+        })
         raise HTTPException(status_code=401, detail="User not found for token")
     return user
 
