@@ -16,7 +16,7 @@ Test Scenario:
 import sys
 from fastapi.testclient import TestClient
 from app.main import app
-from app.databse import get_db
+from app.databse import Base, engine, get_db
 from app.models.db import User, RetirementPlan, OneTimeGoalPlan, RecurringGoalPlan, ConflictResults
 from sqlalchemy.orm import Session
 import json
@@ -43,6 +43,7 @@ def cleanup_test_user(db: Session):
 
 def get_auth_token() -> str:
     """Register and login to get OAuth2 token."""
+    Base.metadata.create_all(bind=engine)
     
     # Get DB session
     db = next(get_db())
@@ -82,7 +83,7 @@ def get_auth_token() -> str:
     
     return token
 
-def test_retirement_plan(token: str) -> dict:
+def run_retirement_plan(token: str) -> dict:
     """Test retirement plan creation and conflict engine."""
     print("\n=== STEP 1: Create Retirement Plan ===")
     
@@ -119,7 +120,7 @@ def test_retirement_plan(token: str) -> dict:
     
     return plan
 
-def test_one_time_goal(token: str, goal_num: int, goal_data: dict) -> dict:
+def run_one_time_goal(token: str, goal_num: int, goal_data: dict) -> dict:
     """Test one-time goal creation and conflict engine."""
     print(f"\n=== STEP {goal_num}: Create One-Time Goal '{goal_data['goal_name']}' ===")
     
@@ -145,7 +146,7 @@ def test_one_time_goal(token: str, goal_num: int, goal_data: dict) -> dict:
     
     return plan
 
-def test_recurring_goal(token: str, goal_num: int, goal_data: dict) -> dict:
+def run_recurring_goal(token: str, goal_num: int, goal_data: dict) -> dict:
     """Test recurring goal creation and conflict engine."""
     print(f"\n=== STEP {goal_num}: Create Recurring Goal '{goal_data['goal_name']}' ===")
     
@@ -172,11 +173,11 @@ def test_recurring_goal(token: str, goal_num: int, goal_data: dict) -> dict:
     
     return plan
 
-def test_profile_overview(token: str) -> dict:
+def run_profile_overview(token: str) -> dict:
     """Test final profile overview with conflict engine."""
     print(f"\n=== FINAL STEP: Profile Overview & Conflict Analysis ===")
     
-    response = client.post(
+    response = client.get(
         "/goals/profile_overview",
         headers={"Authorization": f"Bearer {token}"}
     )
@@ -248,10 +249,10 @@ def main():
         token = get_auth_token()
         
         # Step 1: Retirement Plan
-        retirement_plan = test_retirement_plan(token)
+        retirement_plan = run_retirement_plan(token)
         
         # Step 2: One-Time Goal 1 (Car Purchase)
-        car_goal = test_one_time_goal(token, 2, {
+        car_goal = run_one_time_goal(token, 2, {
             "goal_name": "Car Purchase",
             "goal_amount": 1500000,
             "years_to_goal": 3,
@@ -262,7 +263,7 @@ def main():
         })
         
         # Step 3: One-Time Goal 2 (House Down Payment)
-        house_goal = test_one_time_goal(token, 3, {
+        house_goal = run_one_time_goal(token, 3, {
             "goal_name": "House Down Payment",
             "goal_amount": 5000000,
             "years_to_goal": 7,
@@ -273,7 +274,7 @@ def main():
         })
         
         # Step 4: Recurring Goal (Vacation Every 2 Years)
-        vacation_goal = test_recurring_goal(token, 4, {
+        vacation_goal = run_recurring_goal(token, 4, {
             "goal_name": "International Vacation",
             "current_cost": 200000,
             "years_to_first": 2,
@@ -285,7 +286,7 @@ def main():
         })
         
         # Step 5: Profile Overview
-        overview = test_profile_overview(token)
+        overview = run_profile_overview(token)
         
         print(f"\n" + "=" * 70)
         print("TEST SUMMARY")
@@ -310,3 +311,35 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_e2e_smoke_flow():
+    token = get_auth_token()
+    plan = run_retirement_plan(token)
+    assert plan.get("status") in {"feasible", "infeasible"}
+
+    one_time = run_one_time_goal(token, 2, {
+        "goal_name": "Car Purchase",
+        "goal_amount": 1500000,
+        "years_to_goal": 3,
+        "pre_ret_return": 10.0,
+        "existing_corpus": 0,
+        "existing_monthly_sip": 0,
+        "risk_tolerance": "moderate"
+    })
+    assert one_time.get("status") in {"feasible", "infeasible"}
+
+    recurring = run_recurring_goal(token, 3, {
+        "goal_name": "International Vacation",
+        "current_cost": 200000,
+        "years_to_first": 2,
+        "frequency_years": 2,
+        "num_occurrences": 5,
+        "goal_inflation_pct": 6.0,
+        "expected_return_pct": 10.0,
+        "existing_corpus": 0
+    })
+    assert recurring.get("status") in {"feasible", "infeasible"}
+
+    overview = run_profile_overview(token)
+    assert "overall_status" in overview

@@ -65,6 +65,25 @@ def tight_budget_user():
 class TestOneTimeGoalFeasible:
     """Test feasible one-time goal scenarios."""
 
+    def test_uses_fixed_savings_cap_for_goal_feasibility(self, standard_user):
+        """One-time goal feasibility should use the fixed 50% cap, not conflict-engine floor settings."""
+        standard_user.savings_pct = 20.0
+
+        goal_request = OneTimeGoalRequest(
+            goal_name="Savings Cap Goal",
+            goal_amount=1_200_000,
+            years_to_goal=4.0,
+            pre_ret_return=10.0,
+            existing_corpus=0.0,
+            existing_monthly_sip=0.0,
+            risk_tolerance="moderate"
+        )
+
+        result = one_time_goal(goal_request, standard_user)
+
+        assert result["status"] == "feasible"
+        assert result["feasibility"]["inputs"]["savings_cap_pct"] == 50.0
+
     def test_short_term_car_goal_feasible(self, standard_user):
         """Test short-term car purchase goal (3 years)."""
         goal_request = OneTimeGoalRequest(

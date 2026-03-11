@@ -283,8 +283,8 @@ def calculate_glide_path(data: GlidePathRequest) -> dict:
         debt   = 100 - equity
 
         schedule.append({
-            "year":           current_age + t+1,    # actual age: 31, 32...
-            "age":            current_age + t,    # actual age: 31, 32...
+            "year":           current_age + t,
+            "age":            current_age + t,
             "equity_percent": round(equity, 2),
             "debt_percent":   round(debt, 2)
         })

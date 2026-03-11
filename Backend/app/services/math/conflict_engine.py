@@ -20,6 +20,50 @@ logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
 
+def _coerce_positive_int(value) -> int | None:
+    try:
+        coerced = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return coerced if coerced > 0 else None
+
+
+def _extract_retirement_horizon(retirement_plan: dict | None) -> int | None:
+    if not retirement_plan or retirement_plan.get("status") != "feasible":
+        return None
+
+    retirement_glide = retirement_plan.get("glide_path") or {}
+    return _coerce_positive_int(retirement_glide.get("accumulation_years"))
+
+
+def _extract_onetime_horizon(goal: dict) -> int | None:
+    goal_summary = goal.get("goal_summary") or {}
+    glide_path = goal.get("glide_path") or {}
+
+    return (
+        _coerce_positive_int(goal_summary.get("years_to_goal"))
+        or _coerce_positive_int(glide_path.get("total_years"))
+        or _coerce_positive_int(goal.get("time_horizon_years"))
+    )
+
+
+def _extract_recurring_horizon(goal: dict) -> int | None:
+    goal_summary = goal.get("goal_summary") or {}
+    years_to_first = _coerce_positive_int(
+        goal_summary.get("years_to_first_occurrence", goal_summary.get("years_to_first"))
+    )
+    frequency_years = _coerce_positive_int(goal_summary.get("frequency_years"))
+    num_occurrences = _coerce_positive_int(goal_summary.get("num_occurrences"))
+
+    if years_to_first is not None and frequency_years is not None and num_occurrences is not None:
+        return years_to_first + frequency_years * (num_occurrences - 1)
+
+    return (
+        _coerce_positive_int(goal_summary.get("total_planning_years"))
+        or _coerce_positive_int(goal.get("time_horizon_years"))
+    )
+
+
 def compute_corridor_status(
     total_sip:    float,
     disposable:   float,
@@ -111,38 +155,33 @@ def compute_max_horizon(data: ConflictEngineRequest) -> int:
     horizons = []
     
     time_start = datetime.now()
-    if data.retirement_plan:
-        retirement_glide = data.retirement_plan.get("glide_path") or {}
-        retirement_years = retirement_glide.get("accumulation_years")
-        if retirement_years is not None:
-            horizons.append(int(retirement_years))
+    retirement_years = _extract_retirement_horizon(data.retirement_plan)
+    if retirement_years is not None:
+        horizons.append(retirement_years)
 
     for goal in data.onetime_goals:
         if goal.get("status") != "feasible":
             continue
-        goal_summary = goal.get("goal_summary") or {}
-        years_to_goal = goal_summary.get("years_to_goal")
+        years_to_goal = _extract_onetime_horizon(goal)
         if years_to_goal is not None:
-            horizons.append(int(years_to_goal))
+            horizons.append(years_to_goal)
 
     for goal in data.recurring_goals:
         if goal.get("status") != "feasible":
             continue
-        goal_summary = goal.get("goal_summary") or {}
-        years_to_first = int(goal_summary.get("years_to_first_occurrence", goal_summary.get("years_to_first", 0)) or 0)
-        frequency_years = int(goal_summary.get("frequency_years", 0) or 0)
-        num_occurrences = int(goal_summary.get("num_occurrences", 0) or 0)
-        if frequency_years > 0 and num_occurrences > 0:
-            last_occurrence = years_to_first + frequency_years * (num_occurrences - 1)
-            horizons.append(last_occurrence)
+        recurring_horizon = _extract_recurring_horizon(goal)
+        if recurring_horizon is not None:
+            horizons.append(recurring_horizon)
+    
+    max_horizon = max(horizons) if horizons else 0
             
     time_end= datetime.now()
     logger.info({
         "event":"max horizon computed",         
         "time_taken_seconds": (time_end - time_start).total_seconds(),
-        "horizons_computed": max(horizons)
+        "horizons_computed": max_horizon
     })
-    return max(horizons) if horizons else 0
+    return max_horizon
 
 def compute_all_goal_sips_for_year(data: ConflictEngineRequest, year: int) -> dict:
     goal_sips: dict[str, float] = {}
@@ -156,7 +195,7 @@ def compute_all_goal_sips_for_year(data: ConflictEngineRequest, year: int) -> di
 
         retirement_additional_monthly_sip = float(corpus.get("additional_monthly_sip_required", 0.0))
         retirement_existing_monthly_sip = float(data.retirement_plan.get("existing_monthly_sip", 0.0))
-        retirement_years = int(glide_path.get("accumulation_years", 0) or 0)
+        retirement_years = _extract_retirement_horizon(data.retirement_plan) or 0
 
         # Prefer explicit total from glide path year 1 when available.
         yearly_schedule = glide_path.get("yearly_schedule") or []
@@ -181,9 +220,8 @@ def compute_all_goal_sips_for_year(data: ConflictEngineRequest, year: int) -> di
 
         goal_name = goal.get("goal_name", f"onetime_goal_{idx}")
         sip_plan = goal.get("sip_plan", {})
-        goal_summary = goal.get("goal_summary", {})
 
-        years_to_goal = int(goal_summary.get("years_to_goal", 0))
+        years_to_goal = _extract_onetime_horizon(goal) or 0
         base_monthly_sip = float(
             sip_plan.get(
                 "total_first_year_sip",
@@ -635,6 +673,7 @@ def fetch_onetime_goals(db: Session, user_id: str) -> list[dict]:
         plan["goal_id"] = row.id
         plan["goal_name"] = plan.get("goal_name", row.goal_name)
         plan["priority"] = row.priority
+        plan["time_horizon_years"] = row.time_horizon_years
         goals.append(plan)
     return goals
 
@@ -665,6 +704,7 @@ def fetch_recurring_goals(db: Session, user_id: str) -> list[dict]:
         plan["goal_id"] = row.id
         plan["goal_name"] = plan.get("goal_name", row.goal_name)
         plan["priority"] = row.priority
+        plan["time_horizon_years"] = row.time_horizon_years
         goals.append(plan)
     return goals
 

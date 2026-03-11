@@ -619,8 +619,9 @@ def one_time_goal(data: OneTimeGoalRequest, user: "User") -> dict:
     income_raise_pct = user.income_raise_pct / 100
     current_age = user.age
     
-    # Use default 50% savings cap (disposable income based)
-    savings_cap_pct = user.savings_pct / 100 if user.savings_pct else 50
+    # One-time goal feasibility uses a fixed 50% savings cap.
+    # `user.savings_pct` is the conflict-engine floor, not the goal-feasibility ceiling.
+    savings_cap_pct = 50.0
     
     time_start = datetime.now()
     # Calculate required SIP with step-up

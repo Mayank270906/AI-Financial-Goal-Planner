@@ -36,6 +36,15 @@ def _validation_error_detail(exc: ValidationError) -> str:
 # Retirement Planning Endpoint
 @router.post("/retirement")
 async def endpoint_retirement(
+    marital_status: str | None = Form(None, description="'Single' or 'Married'"),
+    age: int | None = Form(None, ge=18, le=80, description="Current Age"),
+    current_income: float | None = Form(None, gt=0, description="Current Annual Income"),
+    income_raise_pct: float | None = Form(None, ge=0, le=50, description="Expected Annual Income Raise (%)"),
+    current_monthly_expenses: float | None = Form(None, gt=0, description="Current Monthly Household Expenses"),
+    inflation_rate: float | None = Form(None, gt=0, le=20, description="Expected Inflation Rate (%)"),
+    spouse_age: int | None = Form(None, ge=18, le=80),
+    spouse_income: float | None = Form(None, ge=0),
+    spouse_income_raise_pct: float | None = Form(None, ge=0, le=50),
     retirement_age: int = Form(..., ge=35, le=80, description="Target Retirement Age"),
     post_retirement_expense_pct: float = Form(..., gt=0, le=100, description="Post-retirement expenses as % of pre-retirement expenses"),
     post_retirement_return: float = Form(7.0, gt=0, le=20, description="Expected annual return on retirement corpus post-retirement (%)"),
@@ -61,32 +70,65 @@ async def endpoint_retirement(
             "status_code": 404,
         })
         raise HTTPException(status_code=404, detail="User not found. Please complete the onboarding first.")
-    
-    # Build Retirement object with user data from DB and endpoint parameters
-    data = Retirement(
-        name=current_user.full_name,
-        email=current_user.email,
-        phone_number=current_user.phone_number,
-        password="placeholder",
-        marital_status=current_user.marital_status,
-        age=current_user.age,
-        current_income=current_user.current_income,
-        income_raise_pct=current_user.income_raise_pct,
-        current_monthly_expenses=current_user.current_monthly_expenses,
-        inflation_rate=current_user.inflation_rate,
-        spouse_age=current_user.spouse_age,
-        spouse_income=current_user.spouse_income,
-        spouse_income_raise_pct=current_user.spouse_income_raise_pct,
-        retirement_age=retirement_age,
-        post_retirement_expense_pct=post_retirement_expense_pct,
-        post_retirement_return=post_retirement_return,
-        pre_retirement_return=pre_retirement_return,
-        life_expectancy=life_expectancy,
-        annual_post_retirement_income=annual_post_retirement_income,
-        existing_corpus=existing_corpus,
-        existing_monthly_sip=existing_monthly_sip,
-        sip_raise_pct=sip_raise_pct,
-    )
+
+    profile_data = {
+        "name": current_user.full_name,
+        "email": current_user.email,
+        "phone_number": current_user.phone_number,
+        "password": "placeholder",
+        "marital_status": marital_status if marital_status is not None else current_user.marital_status,
+        "age": age if age is not None else current_user.age,
+        "current_income": current_income if current_income is not None else current_user.current_income,
+        "income_raise_pct": income_raise_pct if income_raise_pct is not None else current_user.income_raise_pct,
+        "current_monthly_expenses": current_monthly_expenses if current_monthly_expenses is not None else current_user.current_monthly_expenses,
+        "inflation_rate": inflation_rate if inflation_rate is not None else current_user.inflation_rate,
+        "spouse_age": spouse_age if spouse_age is not None else current_user.spouse_age,
+        "spouse_income": spouse_income if spouse_income is not None else current_user.spouse_income,
+        "spouse_income_raise_pct": (
+            spouse_income_raise_pct if spouse_income_raise_pct is not None else current_user.spouse_income_raise_pct
+        ),
+    }
+
+    try:
+        data = Retirement(
+            **profile_data,
+            retirement_age=retirement_age,
+            post_retirement_expense_pct=post_retirement_expense_pct,
+            post_retirement_return=post_retirement_return,
+            pre_retirement_return=pre_retirement_return,
+            life_expectancy=life_expectancy,
+            annual_post_retirement_income=annual_post_retirement_income,
+            existing_corpus=existing_corpus,
+            existing_monthly_sip=existing_monthly_sip,
+            sip_raise_pct=sip_raise_pct,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_validation_error_detail(exc)) from exc
+
+    override_map = {
+        "marital_status": marital_status,
+        "age": age,
+        "current_income": current_income,
+        "income_raise_pct": income_raise_pct,
+        "current_monthly_expenses": current_monthly_expenses,
+        "inflation_rate": inflation_rate,
+        "spouse_age": spouse_age,
+        "spouse_income": spouse_income,
+        "spouse_income_raise_pct": spouse_income_raise_pct,
+    }
+    profile_updated = any(value is not None for value in override_map.values())
+    if profile_updated:
+        current_user.marital_status = data.marital_status
+        current_user.age = data.age
+        current_user.current_income = data.current_income
+        current_user.income_raise_pct = data.income_raise_pct
+        current_user.current_monthly_expenses = data.current_monthly_expenses
+        current_user.inflation_rate = data.inflation_rate
+        current_user.spouse_age = data.spouse_age
+        current_user.spouse_income = data.spouse_income
+        current_user.spouse_income_raise_pct = data.spouse_income_raise_pct
+        db.commit()
+        db.refresh(current_user)
     
     # Calculate retirement plan
     plan = get_retirement_plan(data)
