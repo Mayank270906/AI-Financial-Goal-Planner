@@ -90,3 +90,12 @@ poetry.lock
 
 # Uvicorn
 *.pid
+
+# Blockchain — Foundry
+blockchain/contracts/out/
+blockchain/contracts/cache/
+blockchain/contracts/broadcast/
+
+# Blockchain — Rust
+blockchain/api/target/
+blockchain/api/.env

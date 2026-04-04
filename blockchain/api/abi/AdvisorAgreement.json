@@ -1,0 +1,416 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "_admin",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "_goalPathAI",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "admin",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "advisorList",
+    "inputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "advisors",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "sebiNumber",
+        "type": "string",
+        "internalType": "string"
+      },
+      {
+        "name": "isVerified",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "registeredAt",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getAdvisors",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple[]",
+        "internalType": "struct AdvisorAgreement.Advisor[]",
+        "components": [
+          {
+            "name": "wallet",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "sebiNumber",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "isVerified",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "registeredAt",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getEventCount",
+    "inputs": [
+      {
+        "name": "planId",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getEvents",
+    "inputs": [
+      {
+        "name": "planId",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple[]",
+        "internalType": "struct AdvisorAgreement.EngagementEvent[]",
+        "components": [
+          {
+            "name": "eventType",
+            "type": "uint8",
+            "internalType": "enum AdvisorAgreement.EventType"
+          },
+          {
+            "name": "planId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "primaryHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "secondaryHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "userWallet",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "advisorWallet",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "feeAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "durationDays",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "serviceScope",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "outcome",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "feeReleased",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "goalPathAI",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "logEvent",
+    "inputs": [
+      {
+        "name": "evt",
+        "type": "tuple",
+        "internalType": "struct AdvisorAgreement.EngagementEvent",
+        "components": [
+          {
+            "name": "eventType",
+            "type": "uint8",
+            "internalType": "enum AdvisorAgreement.EventType"
+          },
+          {
+            "name": "planId",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "primaryHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "secondaryHash",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "userWallet",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "advisorWallet",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "feeAmount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "durationDays",
+            "type": "uint8",
+            "internalType": "uint8"
+          },
+          {
+            "name": "serviceScope",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "outcome",
+            "type": "string",
+            "internalType": "string"
+          },
+          {
+            "name": "feeReleased",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "timestamp",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "registerAdvisor",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "sebiNumber",
+        "type": "string",
+        "internalType": "string"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "verifyAdvisor",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "AdvisorRegistered",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "sebiNumber",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "AdvisorVerified",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "EventLogged",
+    "inputs": [
+      {
+        "name": "planId",
+        "type": "string",
+        "indexed": false,
+        "internalType": "string"
+      },
+      {
+        "name": "eventType",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "enum AdvisorAgreement.EventType"
+      },
+      {
+        "name": "user",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "advisor",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AdvisorAlreadyRegistered",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "AdvisorNotFound",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "Unauthorized",
+    "inputs": []
+  }
+]
