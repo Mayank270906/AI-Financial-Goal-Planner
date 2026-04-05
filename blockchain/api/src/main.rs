@@ -32,6 +32,7 @@ pub struct AppState {
     pub passport_contract: FinancialPassportContract<SignerMiddleware<Provider<Http>, LocalWallet>>,
     pub advisor_contract: AdvisorAgreementContract<SignerMiddleware<Provider<Http>, LocalWallet>>,
     pub provider: Provider<Http>,
+    pub db_pool: sqlx::PgPool,
 }
 
 // ──────────────────────────────────────────────
@@ -129,12 +130,34 @@ async fn main() {
     let advisor_contract =
         AdvisorAgreementContract::new(advisor_address, signer.clone());
 
+    // Initialize database pool
+    let db_pool = sqlx::PgPool::connect(&config.database_url)
+        .await
+        .expect("Failed to connect to PostgreSQL");
+
+    // Initialize ca_profiles table if it doesn't exist
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS ca_profiles (
+            wallet VARCHAR(42) PRIMARY KEY,
+            name VARCHAR(255),
+            email VARCHAR(255),
+            phone VARCHAR(50),
+            years_experience INTEGER
+        );
+        "#,
+    )
+    .execute(&db_pool)
+    .await
+    .expect("Failed to create ca_profiles table");
+
     // Build shared state
     let state = Arc::new(AppState {
         config: config.clone(),
         passport_contract,
         advisor_contract,
         provider: provider.clone(),
+        db_pool,
     });
 
     // CORS — allow the Python backend and any origin during dev

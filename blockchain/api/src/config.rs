@@ -12,6 +12,7 @@ pub struct Config {
     pub port: u16,
     pub etherscan_base_url: String,
     pub chain_id: u64,
+    pub database_url: String,
 }
 
 impl Config {
@@ -41,6 +42,8 @@ impl Config {
                 .unwrap_or_else(|_| "11155111".to_string())
                 .parse()
                 .expect("CHAIN_ID must be a valid u64"),
+            database_url: env::var("DATABASE_URL")
+                .expect("DATABASE_URL must be set"),
         }
     }
 }

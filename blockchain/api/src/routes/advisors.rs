@@ -20,6 +20,10 @@ use crate::middleware::auth::verify_admin_key;
 pub struct RegisterAdvisorRequest {
     pub wallet: String,
     pub sebi_number: String,
+    pub name: String,
+    pub email: String,
+    pub phone: String,
+    pub years_experience: i32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,6 +94,31 @@ pub async fn register_advisor(
     let tx_hash = format!("{:#x}", receipt.transaction_hash);
     let etherscan = format!("{}/tx/{}", state.config.etherscan_base_url, tx_hash);
 
+    let query = r#"
+        INSERT INTO ca_profiles (wallet, name, email, phone, years_experience)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (wallet) DO UPDATE SET
+            name = EXCLUDED.name,
+            email = EXCLUDED.email,
+            phone = EXCLUDED.phone,
+            years_experience = EXCLUDED.years_experience
+    "#;
+
+    if let Err(e) = sqlx::query(query)
+        .bind(&req.wallet)
+        .bind(&req.name)
+        .bind(&req.email)
+        .bind(&req.phone)
+        .bind(req.years_experience)
+        .execute(&state.db_pool)
+        .await
+    {
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database insert failed: {}", e),
+        );
+    }
+
     (
         StatusCode::OK,
         Json(json!({
@@ -97,6 +126,10 @@ pub async fn register_advisor(
             "tx_hash": tx_hash,
             "wallet": req.wallet,
             "sebi_number": req.sebi_number,
+            "name": req.name,
+            "email": req.email,
+            "phone": req.phone,
+            "years_experience": req.years_experience,
             "etherscan": etherscan,
         })),
     )
@@ -167,6 +200,13 @@ pub async fn verify_advisor(
     let tx_hash = format!("{:#x}", receipt.transaction_hash);
     let etherscan = format!("{}/tx/{}", state.config.etherscan_base_url, tx_hash);
 
+    let wallet_str = format!("{:#x}", wallet);
+    let profile = sqlx::query_as::<_, CaProfile>("SELECT * FROM ca_profiles WHERE wallet ILIKE $1")
+        .bind(&wallet_str)
+        .fetch_optional(&state.db_pool)
+        .await
+        .unwrap_or(None);
+
     (
         StatusCode::OK,
         Json(json!({
@@ -174,10 +214,23 @@ pub async fn verify_advisor(
             "tx_hash": tx_hash,
             "wallet": req.wallet,
             "verified": true,
+            "name": profile.as_ref().and_then(|p| p.name.clone()),
+            "email": profile.as_ref().and_then(|p| p.email.clone()),
+            "phone": profile.as_ref().and_then(|p| p.phone.clone()),
+            "years_experience": profile.as_ref().and_then(|p| p.years_experience),
             "etherscan": etherscan,
         })),
     )
         .into_response()
+}
+
+#[derive(sqlx::FromRow)]
+struct CaProfile {
+    wallet: String,
+    name: Option<String>,
+    email: Option<String>,
+    phone: Option<String>,
+    years_experience: Option<i32>,
 }
 
 // ──────────────────────────────────────────────
@@ -189,16 +242,40 @@ pub async fn list_advisors(
 ) -> Response {
     let contract = &state.advisor_contract;
 
+    let db_profiles = match sqlx::query_as::<_, CaProfile>("SELECT * FROM ca_profiles")
+        .fetch_all(&state.db_pool)
+        .await
+    {
+        Ok(profiles) => profiles,
+        Err(e) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read profiles from DB: {}", e),
+            )
+        }
+    };
+
     match contract.get_advisors().call().await {
         Ok(advisors) => {
             let serialized: Vec<serde_json::Value> = advisors
                 .iter()
                 .map(|a| {
+                    let wallet_str = format!("{:#x}", a.wallet);
+                    
+                    // Match with DB profile
+                    let profile = db_profiles
+                        .iter()
+                        .find(|p| p.wallet.eq_ignore_ascii_case(&wallet_str));
+
                     json!({
-                        "wallet": format!("{:#x}", a.wallet),
+                        "wallet": wallet_str,
                         "sebi_number": a.sebi_number,
                         "is_verified": a.is_verified,
                         "registered_at": a.registered_at.as_u64(),
+                        "name": profile.and_then(|p| p.name.clone()),
+                        "email": profile.and_then(|p| p.email.clone()),
+                        "phone": profile.and_then(|p| p.phone.clone()),
+                        "years_experience": profile.and_then(|p| p.years_experience),
                     })
                 })
                 .collect();

@@ -11,6 +11,9 @@ tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
+# Database
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls"] }
+
 # Ethereum
 ethers = { version = "2", features = ["abigen", "ws", "rustls"] }
 

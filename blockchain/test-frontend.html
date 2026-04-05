@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rust API Tester - Full</title>
+    <style>
+        body { font-family: monospace; background: #fff; color: #000; padding: 20px; }
+        section { border: 1px solid #000; padding: 15px; margin-bottom: 20px; }
+        input, button { margin: 5px 0; padding: 5px; font-family: monospace; }
+        pre { background: #eee; padding: 10px; overflow-x: auto; max-height: 200px;}
+        hr { border: 1px dashed #000; margin: 20px 0;}
+    </style>
+</head>
+<body>
+
+    <h1>Rust API Full Tester</h1>
+    <p>Connected to: <strong>http://localhost:3001</strong></p>
+
+    <!-- CA PORTAL -->
+    <section>
+        <h2>🛡️ CA Portal / Advisors</h2>
+        
+        <h3>1. List Registered Advisors</h3>
+        <button onclick="listAdvisors()">[ GET /chain/advisors/list ]</button>
+        <pre id="advisorListOut">...</pre>
+        <hr>
+
+        <h3>2. Register New Advisor</h3>
+        <input type="text" id="regWallet" placeholder="Advisor Wallet (0x...)"><br>
+        <input type="text" id="regSebi" placeholder="SEBI Number (e.g. INA00...)"><br>
+        <input type="text" id="regName" placeholder="Full Name"><br>
+        <input type="email" id="regEmail" placeholder="Email Address"><br>
+        <input type="text" id="regPhone" placeholder="Phone Number"><br>
+        <input type="number" id="regExperience" placeholder="Years of Experience"><br>
+        <button onclick="registerAdvisor()">[ POST /chain/advisors/register ]</button>
+        <pre id="advisorRegOut">...</pre>
+        <hr>
+
+        <h3>3. Admin Verify Advisor</h3>
+        <input type="text" id="verifyWallet" placeholder="Advisor Wallet (0x...)"><br>
+        <input type="text" id="adminKey" placeholder="Admin Key Header Value"><br>
+        <button onclick="verifyAdvisor()">[ POST /chain/advisors/verify ]</button>
+        <pre id="verifyOut">...</pre>
+    </section>
+
+    <!-- FINANCIAL PASSPORT -->
+    <section>
+        <h2>🛂 Financial Passport</h2>
+
+        <h3>1. Mint Soulbound Passport</h3>
+        <input type="text" id="mintWallet" placeholder="User Wallet (0x...)"><br>
+        <input type="text" id="mintHash" placeholder="Plan Hash (0x...)"><br>
+        <button onclick="mintPassport()">[ POST /chain/passport/mint ]</button>
+        <pre id="mintOut">...</pre>
+        <hr>
+
+        <h3>2. Update Passport Hash</h3>
+        <input type="text" id="updWallet" placeholder="User Wallet (0x...)"><br>
+        <input type="text" id="updHash" placeholder="New Plan Hash (0x...)"><br>
+        <button onclick="updatePassport()">[ POST /chain/passport/update ]</button>
+        <pre id="updOut">...</pre>
+        <hr>
+
+        <h3>3. Get Passport Data</h3>
+        <input type="text" id="getPassWallet" placeholder="User Wallet (0x...)"><br>
+        <button onclick="getPassport()">[ GET /chain/passport/:wallet ]</button>
+        <pre id="getPassOut">...</pre>
+        <hr>
+
+        <h3>4. Get Identity Card</h3>
+        <input type="text" id="getIdWallet" placeholder="User Wallet (0x...)"><br>
+        <button onclick="getIdentity()">[ GET /chain/identity/:wallet ]</button>
+        <pre id="getIdOut">...</pre>
+    </section>
+
+    <!-- EVENTS LEDGER -->
+    <section>
+        <h2>📜 Engagement Ledger Events</h2>
+
+        <h3>1. Log Event</h3>
+        <input type="number" id="evType" placeholder="Event Type (0-5)" min="0" max="5"><br>
+        <input type="text" id="evPlanId" placeholder="Unique Plan ID (e.g. plan_123)"><br>
+        <input type="text" id="evPrimHash" placeholder="Primary Hash (0x...)"><br>
+        <input type="text" id="evSecHash" placeholder="Secondary Hash (0x...) (Optional)"><br>
+        <input type="text" id="evUserWallet" placeholder="User Wallet (0x...)"><br>
+        <input type="text" id="evAdvWallet" placeholder="Advisor Wallet (0x...)"><br>
+        <input type="text" id="evFee" placeholder="Fee Amount (e.g. 1000000) (Optional)"><br>
+        <button onclick="logEvent()">[ POST /chain/events/log ]</button>
+        <pre id="evLogOut">...</pre>
+        <hr>
+
+        <h3>2. Get All Events for a Plan</h3>
+        <input type="text" id="getEvPlan" placeholder="Plan ID (e.g. plan_123)"><br>
+        <button onclick="getEvents()">[ GET /chain/events/:plan_id ]</button>
+        <pre id="getEvOut">...</pre>
+    </section>
+
+
+    <script>
+        const API_BASE = "http://localhost:3001";
+        const HEADERS = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer GOALPATH_INTERNAL_KEY_2026"
+        };
+
+        // --- ADVISORS ---
+        async function listAdvisors() {
+            document.getElementById("advisorListOut").innerText = "Loading...";
+            const res = await fetch(`${API_BASE}/chain/advisors/list`, { headers: HEADERS });
+            document.getElementById("advisorListOut").innerText = JSON.stringify(await res.json(), null, 2);
+        }
+
+        async function registerAdvisor() {
+            const wallet = document.getElementById("regWallet").value;
+            const sebi_number = document.getElementById("regSebi").value;
+            const name = document.getElementById("regName").value;
+            const email = document.getElementById("regEmail").value;
+            const phone = document.getElementById("regPhone").value;
+            const years_experience = parseInt(document.getElementById("regExperience").value || "0");
+
+            document.getElementById("advisorRegOut").innerText = "Sending tx...";
+            const res = await fetch(`${API_BASE}/chain/advisors/register`, {
+                method: 'POST', headers: HEADERS, body: JSON.stringify({ wallet, sebi_number, name, email, phone, years_experience })
+            });
+            document.getElementById("advisorRegOut").innerText = JSON.stringify(await res.json(), null, 2);
+        }
+
+        async function verifyAdvisor() {
+            const wallet = document.getElementById("verifyWallet").value;
+            const adminKey = document.getElementById("adminKey").value;
+            document.getElementById("verifyOut").innerText = "Sending tx...";
+            const res = await fetch(`${API_BASE}/chain/advisors/verify`, {
+                method: 'POST', 
+                headers: { "Content-Type": "application/json", "Authorization": "Bearer GOALPATH_INTERNAL_KEY_2026", "X-Admin-Key": adminKey },
+                body: JSON.stringify({ wallet })
+            });
+            document.getElementById("verifyOut").innerText = JSON.stringify(await res.json(), null, 2);
+        }
+
+        // --- PASSPORT & IDENTITY ---
+        async function mintPassport() {
+            const user_wallet = document.getElementById("mintWallet").value;
+            const plan_hash = document.getElementById("mintHash").value;
+            document.getElementById("mintOut").innerText = "Minting... (wait)";
+            const res = await fetch(`${API_BASE}/chain/passport/mint`, {
+                method: 'POST', headers: HEADERS, body: JSON.stringify({ user_wallet, plan_hash })
+            });
+            document.getElementById("mintOut").innerText = JSON.stringify(await res.json(), null, 2);
+        }
+
+        async function updatePassport() {
+            const user_wallet = document.getElementById("updWallet").value;
+            const new_hash = document.getElementById("updHash").value;
+            document.getElementById("updOut").innerText = "Updating... (wait)";
+            const res = await fetch(`${API_BASE}/chain/passport/update`, {
+                method: 'POST', headers: HEADERS, body: JSON.stringify({ user_wallet, new_hash })
+            });
+            document.getElementById("updOut").innerText = JSON.stringify(await res.json(), null, 2);
+        }
+
+        async function getPassport() {
+            const wallet = document.getElementById("getPassWallet").value;
+            document.getElementById("getPassOut").innerText = "Loading...";
+            const res = await fetch(`${API_BASE}/chain/passport/${wallet}`, { headers: HEADERS });
+            document.getElementById("getPassOut").innerText = JSON.stringify(await res.json(), null, 2);
+        }
+
+        async function getIdentity() {
+            const wallet = document.getElementById("getIdWallet").value;
+            document.getElementById("getIdOut").innerText = "Loading...";
+            const res = await fetch(`${API_BASE}/chain/identity/${wallet}`, { headers: HEADERS });
+            document.getElementById("getIdOut").innerText = JSON.stringify(await res.json(), null, 2);
+        }
+
+        // --- EVENTS ---
+        async function logEvent() {
+            const payload = {
+                event_type: parseInt(document.getElementById("evType").value || "0"),
+                plan_id: document.getElementById("evPlanId").value,
+                primary_hash: document.getElementById("evPrimHash").value,
+                secondary_hash: document.getElementById("evSecHash").value || undefined,
+                user_wallet: document.getElementById("evUserWallet").value,
+                advisor_wallet: document.getElementById("evAdvWallet").value,
+                fee_amount: document.getElementById("evFee").value || "0",
+            };
+            document.getElementById("evLogOut").innerText = "Logging event... (wait)";
+            const res = await fetch(`${API_BASE}/chain/events/log`, {
+                method: 'POST', headers: HEADERS, body: JSON.stringify(payload)
+            });
+            document.getElementById("evLogOut").innerText = JSON.stringify(await res.json(), null, 2);
+        }
+
+        async function getEvents() {
+            const plan_id = document.getElementById("getEvPlan").value;
+            document.getElementById("getEvOut").innerText = "Loading...";
+            const res = await fetch(`${API_BASE}/chain/events/${plan_id}`, { headers: HEADERS });
+            document.getElementById("getEvOut").innerText = JSON.stringify(await res.json(), null, 2);
+        }
+
+    </script>
+
+</body>
+</html>
