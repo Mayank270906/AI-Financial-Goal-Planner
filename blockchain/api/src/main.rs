@@ -1,5 +1,5 @@
 use std::sync::Arc;
-
+use std::str::FromStr;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -130,8 +130,13 @@ async fn main() {
     let advisor_contract =
         AdvisorAgreementContract::new(advisor_address, signer.clone());
 
-    // Initialize database pool
-    let db_pool = sqlx::PgPool::connect(&config.database_url)
+    // Initialize database pool with PgBouncer compatibility
+    let connect_options = sqlx::postgres::PgConnectOptions::from_str(&config.database_url)
+        .expect("Invalid DATABASE_URL")
+        .statement_cache_capacity(0); // Disable prepared statements to fix Supabase PgBouncer (Port 6543) error "42P05"
+
+    let db_pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_with(connect_options)
         .await
         .expect("Failed to connect to PostgreSQL");
 
